@@ -9,18 +9,15 @@ import {
   Activity,
   Lock,
   User,
-  ShieldCheck,
-  Sparkles,
   ArrowRight,
   AlertCircle,
   Database,
-  CheckCircle2,
 } from 'lucide-react';
 
 export const LoginPage: React.FC = () => {
-  const { login, dbStatus } = useHealth();
-  const [username, setUsername] = useState('trunghbl');
-  const [password, setPassword] = useState('123');
+  const { login } = useHealth();
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -34,12 +31,6 @@ export const LoginPage: React.FC = () => {
     if (!res.success) {
       setErrorMsg(res.error || 'Tên đăng nhập hoặc mật khẩu không đúng!');
     }
-  };
-
-  const fillCredentials = (u: string, p: string) => {
-    setUsername(u);
-    setPassword(p);
-    setErrorMsg('');
   };
 
   return (
@@ -62,7 +53,7 @@ export const LoginPage: React.FC = () => {
 
           <div className="mt-3 inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
             <Database className="w-3.5 h-3.5 text-emerald-600" />
-            <span>Kết nối Aiven Cloud: TramTap</span>
+            <span>Xác thực tài khoản trực tiếp từ Database</span>
           </div>
         </div>
 
@@ -87,7 +78,7 @@ export const LoginPage: React.FC = () => {
                 required
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="Nhập tên đăng nhập (ví dụ: trunghbl)"
+                placeholder="Nhập tên đăng nhập"
                 className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-hidden font-medium text-slate-900 transition-colors"
               />
             </div>
@@ -119,71 +110,6 @@ export const LoginPage: React.FC = () => {
             <ArrowRight className="w-4 h-4" />
           </button>
         </form>
-
-        {/* Quick Demo Access Pills */}
-        <div className="mt-8 pt-6 border-t border-slate-100">
-          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-3 text-center">
-            Tài khoản thử nghiệm nhanh
-          </div>
-
-          <div className="space-y-2 text-xs">
-            {/* Trainer trunghbl */}
-            <div
-              onClick={() => fillCredentials('trunghbl', '123')}
-              className="p-2.5 rounded-xl border border-emerald-200 bg-emerald-50/70 hover:bg-emerald-100/70 transition-colors cursor-pointer flex items-center justify-between"
-            >
-              <div className="flex items-center space-x-2">
-                <ShieldCheck className="w-4 h-4 text-emerald-700" />
-                <div>
-                  <span className="font-bold text-emerald-950">HLV: trunghbl</span>
-                  <span className="text-[10px] text-emerald-700 ml-1.5">(Quyền tạo học viên)</span>
-                </div>
-              </div>
-              <span className="text-[11px] font-mono bg-white px-2 py-0.5 rounded text-emerald-800 font-semibold border border-emerald-200">
-                pass: 123
-              </span>
-            </div>
-
-            {/* Student 1 */}
-            <div
-              onClick={() => fillCredentials('hoanglong', '123')}
-              className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer flex items-center justify-between"
-            >
-              <div className="flex items-center space-x-2">
-                <User className="w-4 h-4 text-slate-500" />
-                <div>
-                  <span className="font-bold text-slate-800">Học viên: hoanglong</span>
-                  <span className="text-[10px] text-slate-500 ml-1.5">(Nguyễn Hoàng Long)</span>
-                </div>
-              </div>
-              <span className="text-[11px] font-mono bg-white px-2 py-0.5 rounded text-slate-600 font-semibold border border-slate-200">
-                pass: 123
-              </span>
-            </div>
-
-            {/* Student 2 */}
-            <div
-              onClick={() => fillCredentials('thuha', '123')}
-              className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer flex items-center justify-between"
-            >
-              <div className="flex items-center space-x-2">
-                <User className="w-4 h-4 text-slate-500" />
-                <div>
-                  <span className="font-bold text-slate-800">Học viên: thuha</span>
-                  <span className="text-[10px] text-slate-500 ml-1.5">(Trần Thị Thu Hà)</span>
-                </div>
-              </div>
-              <span className="text-[11px] font-mono bg-white px-2 py-0.5 rounded text-slate-600 font-semibold border border-slate-200">
-                pass: 123
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Security Rule Note */}
-        <div className="mt-5 text-center text-[11px] text-slate-400">
-          Chỉ tài khoản <strong className="text-slate-600">trunghbl</strong> mới có thẩm quyền khởi tạo tài khoản và hồ sơ mới cho học viên.
-        </div>
       </div>
     </div>
   );

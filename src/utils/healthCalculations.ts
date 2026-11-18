@@ -9,6 +9,10 @@ import {
   HealthScoreBreakdown,
   AnomalyAlert,
   AIAdviceRecord,
+  WarningMetricItem,
+  ActionRecommendationItem,
+  AIHealthAnalysisContent,
+  CalorieGoalBreakdown,
 } from '../types/health';
 import {
   getIdealWeightRange,
@@ -30,19 +34,192 @@ export function calculateWaterTarget(weightKg: number, workoutDurationMins: numb
 }
 
 /**
- * 2. Calculate Daily Calorie Target
+ * Helper: Parse desired timeframe in weeks from student's targetMetrics or healthGoal text
+ */
+export function resolveTargetDurationWeeks(profile?: StudentProfile, weightDiffKg: number = 3): number {
+  if (profile?.targetMetrics?.targetDurationWeeks && profile.targetMetrics.targetDurationWeeks > 0) {
+    return profile.targetMetrics.targetDurationWeeks;
+  }
+  const goalText = (profile?.healthGoal || '').toLowerCase();
+  const weekMatch = goalText.match(/(\d+)\s*tuần/);
+  if (weekMatch) return Math.max(1, parseInt(weekMatch[1], 10));
+  const monthMatch = goalText.match(/(\d+)\s*tháng/);
+  if (monthMatch) return Math.max(2, parseInt(monthMatch[1], 10) * 4);
+  const dayMatch = goalText.match(/(\d+)\s*ngày/);
+  if (dayMatch) return Math.max(1, Math.round(parseInt(dayMatch[1], 10) / 7));
+
+  // Default realistic medical pace (~0.5kg - 0.6kg per week, minimum 4 weeks, default 8 weeks)
+  if (weightDiffKg > 0) {
+    return Math.max(4, Math.min(24, Math.round(weightDiffKg / 0.55)));
+  }
+  return 8;
+}
+
+/**
+ * 2. Calculate Detailed Calorie Plan based on 4 factors:
+ * - Current Weight (kg)
+ * - Target Weight (kg) -> Weight to Lose or Gain (1kg ≈ 7,700 Kcal)
+ * - Desired Timeframe (weeks / days)
+ * - Visceral Fat Level (Mức mỡ nội tạng hiện tại & mục tiêu)
+ * - BMR & TDEE
+ */
+export function calculateCalorieGoalBreakdown(
+  bmr: number,
+  currentWeightKg: number,
+  profile?: StudentProfile,
+  activityFactor: number = 1.375,
+  currentVisceralFat?: number
+): CalorieGoalBreakdown {
+  const safeBmr = bmr || 1550;
+  const tdee = Math.round(safeBmr * activityFactor);
+  const lowerGoal = (profile?.healthGoal || '').toLowerCase();
+
+  // Determine target weight: explicit targetWeight, or parsed from healthGoal ("giảm X kg" / "tăng X kg"), or ideal weight
+  let targetWeightKg = profile?.targetMetrics?.targetWeight;
+  if (!targetWeightKg || targetWeightKg <= 0) {
+    const loseMatch = lowerGoal.match(/giảm\s*(\d+(?:[.,]\d+)?)\s*kg/);
+    const gainMatch = lowerGoal.match(/tăng\s*(\d+(?:[.,]\d+)?)\s*kg/);
+    if (loseMatch) {
+      targetWeightKg = Number((currentWeightKg - parseFloat(loseMatch[1].replace(',', '.'))).toFixed(1));
+    } else if (gainMatch) {
+      targetWeightKg = Number((currentWeightKg + parseFloat(gainMatch[1].replace(',', '.'))).toFixed(1));
+    } else if (profile) {
+      const ideal = getIdealWeightRange(profile.height, profile.gender);
+      if (lowerGoal.includes('giảm') || lowerGoal.includes('siết') || lowerGoal.includes('mỡ')) {
+        targetWeightKg = Number(Math.min(currentWeightKg - 3, ideal.maxKg).toFixed(1));
+      } else if (lowerGoal.includes('tăng')) {
+        targetWeightKg = Number(Math.max(currentWeightKg + 3, ideal.minKg).toFixed(1));
+      } else {
+        targetWeightKg = currentWeightKg;
+      }
+    } else {
+      targetWeightKg = currentWeightKg;
+    }
+  }
+
+  const rawDiff = Number((targetWeightKg - currentWeightKg).toFixed(1));
+  const weightDiffKg = Number(Math.abs(rawDiff).toFixed(1));
+  const durationWeeks = resolveTargetDurationWeeks(profile, weightDiffKg);
+  const durationDays = durationWeeks * 7;
+
+  // Visceral Fat factor (Mức mỡ nội tạng hiện tại & mục tiêu)
+  const visceralLevel = typeof currentVisceralFat === 'number' && currentVisceralFat > 0 ? currentVisceralFat : undefined;
+  const targetVisceral = profile?.targetMetrics?.targetVisceralFat;
+  let visceralDeficitBoost = 0;
+  if (visceralLevel !== undefined) {
+    if (visceralLevel >= 13) visceralDeficitBoost = 150;
+    else if (visceralLevel >= 9) visceralDeficitBoost = 100;
+    else if (visceralLevel >= 6) visceralDeficitBoost = 50;
+  }
+
+  const visceralText =
+    visceralLevel !== undefined
+      ? ` và mức mỡ nội tạng cấp ${visceralLevel}${targetVisceral ? ` (mục tiêu cấp ${targetVisceral})` : ''}`
+      : targetVisceral
+      ? ` và mục tiêu mỡ nội tạng cấp ${targetVisceral}`
+      : '';
+
+  let mode: CalorieGoalBreakdown['mode'] = 'maintenance';
+  let label = 'Mức Calo Duy Trì Mỗi Ngày';
+  let dailyCalorieAdjustment = 0;
+  let targetDailyCalories = tdee;
+  let visceralFatAdjustmentKcal = 0;
+  let explanation = '';
+
+  if (rawDiff < -0.2 || (rawDiff === 0 && (lowerGoal.includes('giảm') || lowerGoal.includes('siết') || lowerGoal.includes('mỡ')))) {
+    mode = 'weight_loss';
+    label = 'Mức Calo TỐI ĐA Nạp Mỗi Ngày (Giảm Cân)';
+    const effectiveDiffKg = weightDiffKg > 0 ? weightDiffKg : 3.0;
+    const effectiveTargetKg = weightDiffKg > 0 ? targetWeightKg : Number((currentWeightKg - 3.0).toFixed(1));
+    const neededDailyDeficit = Math.round((effectiveDiffKg * 7700) / durationDays);
+    visceralFatAdjustmentKcal = -visceralDeficitBoost;
+    // Safe medical deficit: 300 to 1000 Kcal/day, never dropping below 1150 Kcal
+    const safeDeficit = Math.min(1000, Math.max(300, neededDailyDeficit + visceralDeficitBoost));
+    targetDailyCalories = Math.max(1150, tdee - safeDeficit);
+    dailyCalorieAdjustment = targetDailyCalories - tdee; // negative value
+    explanation = `Dựa trên cân nặng hiện tại ${currentWeightKg}kg, mục tiêu giảm ${effectiveDiffKg}kg về ${effectiveTargetKg}kg trong ${durationWeeks} tuần (${durationDays} ngày)${visceralText}: Tổng năng lượng cần thâm hụt là ${(effectiveDiffKg * 7700).toLocaleString('vi-VN')} Kcal${visceralDeficitBoost > 0 ? ` (cộng thêm -${visceralDeficitBoost} Kcal/ngày để ưu tiên đốt mỡ nội tạng)` : ''}. Với TDEE ${tdee} Kcal/ngày (BMR ${safeBmr} Kcal), cần thâm hụt ${Math.abs(dailyCalorieAdjustment)} Kcal/ngày → Mức Calo TỐI ĐA nạp vào mỗi ngày là ${targetDailyCalories} Kcal.`;
+    targetWeightKg = effectiveTargetKg;
+  } else if (rawDiff > 0.2 || (rawDiff === 0 && lowerGoal.includes('tăng'))) {
+    mode = 'weight_gain';
+    label = 'Mức Calo TỐI THIỂU Nạp Mỗi Ngày (Tăng Cân)';
+    const effectiveDiffKg = weightDiffKg > 0 ? weightDiffKg : 3.0;
+    const effectiveTargetKg = weightDiffKg > 0 ? targetWeightKg : Number((currentWeightKg + 3.0).toFixed(1));
+    const neededDailySurplus = Math.round((effectiveDiffKg * 7700) / durationDays);
+    // If visceral fat is elevated (>= 6), cap lean-gain surplus conservatively so visceral fat does not rise
+    const maxSafeSurplus = visceralLevel !== undefined && visceralLevel >= 9 ? 350 : visceralLevel !== undefined && visceralLevel >= 6 ? 500 : 850;
+    const safeSurplus = Math.min(maxSafeSurplus, Math.max(200, neededDailySurplus - Math.round(visceralDeficitBoost * 0.5)));
+    visceralFatAdjustmentKcal = visceralDeficitBoost > 0 ? -Math.round(visceralDeficitBoost * 0.5) : 0;
+    dailyCalorieAdjustment = safeSurplus; // positive value
+    targetDailyCalories = tdee + safeSurplus;
+    explanation = `Dựa trên cân nặng hiện tại ${currentWeightKg}kg, mục tiêu tăng +${effectiveDiffKg}kg lên ${effectiveTargetKg}kg trong ${durationWeeks} tuần (${durationDays} ngày)${visceralText}: Với mức tiêu hao TDEE ${tdee} Kcal/ngày (BMR ${safeBmr} Kcal), cần thặng dư sạch +${dailyCalorieAdjustment} Kcal/ngày${visceralLevel !== undefined && visceralLevel >= 6 ? ' (đã kiểm soát trần thặng dư để không tăng mỡ nội tạng)' : ''} → Mức Calo TỐI THIỂU cần nạp mỗi ngày là ${targetDailyCalories} Kcal.`;
+    targetWeightKg = effectiveTargetKg;
+  } else if (visceralLevel !== undefined && (visceralLevel >= 6 || (targetVisceral !== undefined && visceralLevel > targetVisceral))) {
+    // Stable weight but elevated visceral fat -> mild body recomposition deficit
+    mode = 'weight_loss';
+    label = 'Mức Calo TỐI ĐA Nạp Mỗi Ngày (Giảm Mỡ Nội Tạng)';
+    const gapLevels = targetVisceral !== undefined ? Math.max(1, visceralLevel - targetVisceral) : Math.max(1, visceralLevel - 4);
+    const recompositionDeficit = Math.min(450, Math.max(200, visceralDeficitBoost + gapLevels * 35));
+    visceralFatAdjustmentKcal = -recompositionDeficit;
+    targetDailyCalories = Math.max(1200, tdee - recompositionDeficit);
+    dailyCalorieAdjustment = targetDailyCalories - tdee;
+    explanation = `Cân nặng hiện tại (${currentWeightKg}kg) sát mức mục tiêu (${targetWeightKg}kg), nhưng mức mỡ nội tạng đang ở cấp ${visceralLevel}${targetVisceral ? ` (mục tiêu cấp ${targetVisceral})` : ''}. Với TDEE ${tdee} Kcal/ngày trong lộ trình ${durationWeeks} tuần, cần thâm hụt nhẹ ${Math.abs(dailyCalorieAdjustment)} Kcal/ngày → Mức Calo TỐI ĐA nạp mỗi ngày là ${targetDailyCalories} Kcal để siết mỡ nội tạng mà vẫn giữ cơ.`;
+  } else {
+    mode = 'maintenance';
+    label = 'Mức Calo Chuẩn Duy Trì Mỗi Ngày';
+    dailyCalorieAdjustment = 0;
+    targetDailyCalories = tdee;
+    explanation = `Cân nặng hiện tại (${currentWeightKg}kg) đã đạt mốc mục tiêu (${targetWeightKg}kg)${visceralText}. Với BMR ${safeBmr} Kcal, mức tiêu hao TDEE là ${tdee} Kcal/ngày → Duy trì nạp ${targetDailyCalories} Kcal/ngày để giữ cân và ổn định chuyển hóa.`;
+  }
+
+  const proteinMultiplier = mode === 'weight_loss' ? (visceralLevel !== undefined && visceralLevel >= 6 ? 2.1 : 2.0) : 1.8;
+  const proteinGrams = Math.round(currentWeightKg * proteinMultiplier);
+  const fatGrams = Math.round((targetDailyCalories * 0.25) / 9);
+  const carbsGrams = Math.max(50, Math.round((targetDailyCalories - proteinGrams * 4 - fatGrams * 9) / 4));
+
+  return {
+    mode,
+    label,
+    currentWeightKg,
+    targetWeightKg,
+    weightDiffKg: Number(Math.abs(targetWeightKg - currentWeightKg).toFixed(1)),
+    currentVisceralFat: visceralLevel,
+    targetVisceralFat: targetVisceral,
+    visceralFatAdjustmentKcal,
+    durationWeeks,
+    durationDays,
+    bmr: safeBmr,
+    tdee,
+    dailyCalorieAdjustment,
+    targetDailyCalories,
+    recommendedMacros: {
+      proteinGrams,
+      carbsGrams,
+      fatGrams,
+    },
+    explanation,
+  };
+}
+
+/**
+ * 2b. Calculate Daily Calorie Target (compatible wrapper)
  */
 export function calculateCalorieTarget(
   bmr: number,
   healthGoal: string,
-  activityFactor: number = 1.375
+  activityFactor: number = 1.375,
+  currentWeightKg?: number,
+  profile?: StudentProfile,
+  currentVisceralFat?: number
 ): number {
+  if (currentWeightKg && profile) {
+    return calculateCalorieGoalBreakdown(bmr, currentWeightKg, profile, activityFactor, currentVisceralFat).targetDailyCalories;
+  }
   let goalOffset = 0;
   const lowerGoal = healthGoal.toLowerCase();
   if (lowerGoal.includes('giảm') || lowerGoal.includes('mỡ') || lowerGoal.includes('siết') || lowerGoal.includes('weight loss')) {
-    goalOffset = -300;
+    goalOffset = -400;
   } else if (lowerGoal.includes('tăng') || lowerGoal.includes('cơ') || lowerGoal.includes('bulk') || lowerGoal.includes('muscle')) {
-    goalOffset = 300;
+    goalOffset = 400;
   }
   const target = Math.round(bmr * activityFactor + goalOffset);
   return Math.max(1200, target);
@@ -227,76 +404,234 @@ export function detectAnomalies(
 
 /**
  * 5. Instant AI Advice Generator (KHÔNG CẦN DUYỆT - TỰ ĐỘNG PHÁT HÀNH THEO BIẾN ĐỘNG CHỈ SỐ)
- * Dựa trên đối soát các bảng chuẩn: Chiều cao/cân nặng lý tưởng, Mỡ nội tạng & bệnh lý, Khối lượng xương, Phân loại thể hình 1-9
+ * Áp dụng 'System Template' chuyên biệt cho phân tích sức khỏe:
+ * Phần 1: Chỉ số cảnh báo (Warning Metrics)
+ * Phần 2: Đánh giá chuyên sâu (Deep Assessment)
+ * Phần 3: Khuyến nghị hành động cụ thể (Action Recommendations)
  */
 export function generateInstantAIAdvice(
   profile: StudentProfile,
   latest: HealthMetricRecord,
   previous?: HealthMetricRecord
-): AIAdviceRecord['aiDraftContent'] {
+): AIHealthAnalysisContent {
   const waterTarget = calculateWaterTarget(latest.weight, 45);
-  const calorieTarget = calculateCalorieTarget(latest.bmr, profile.healthGoal);
+  const calorieAnalysis = calculateCalorieGoalBreakdown(latest.bmr, latest.weight, profile, 1.375, latest.visceralFat);
+  const calorieTarget = calorieAnalysis.targetDailyCalories;
   const idealWeight = getIdealWeightRange(profile.height, profile.gender);
   const visceralEval = getVisceralFatEvaluation(latest.visceralFat);
   const boneStandard = getBoneMassEvaluation(latest.weight, profile.gender);
 
-  // Analyze changes
-  let changeSummary = '';
+  // ==========================================
+  // PHẦN 1: CHỈ SỐ CẢNH BÁO (warningMetrics)
+  // ==========================================
+  const warningMetrics: WarningMetricItem[] = [];
+
+  // 1. Cảnh báo Mỡ nội tạng
+  if (latest.visceralFat >= 13) {
+    warningMetrics.push({
+      name: 'Mỡ nội tạng (BÁO ĐỘNG ĐỎ)',
+      value: `Cấp ${latest.visceralFat}`,
+      standard: 'Cấp 1 - 4 (Tối ưu)',
+      level: 'danger',
+      risk: 'Nguy cơ đột quỵ, nhồi máu cơ tim, xơ gan do gan nhiễm mỡ tiến triển và biến chứng tim mạch nặng.',
+    });
+  } else if (latest.visceralFat >= 9) {
+    warningMetrics.push({
+      name: 'Mỡ nội tạng (Vượt mức cho phép)',
+      value: `Cấp ${latest.visceralFat}`,
+      standard: 'Cấp 1 - 4 (Tối ưu), 5 (Trung bình)',
+      level: 'danger',
+      risk: 'Gây đề kháng insulin dẫn đến tiểu đường type 2, xơ vữa động mạch vành và áp lực thoái hóa khớp gối.',
+    });
+  } else if (latest.visceralFat >= 6) {
+    warningMetrics.push({
+      name: 'Mỡ nội tạng (Mức cảnh báo)',
+      value: `Cấp ${latest.visceralFat}`,
+      standard: 'Cấp 1 - 4 (Tối ưu)',
+      level: 'warning',
+      risk: 'Bắt đầu tích tụ mỡ quanh bao gan và tim, cản trở lưu thông mạch máu nếu không can thiệp sớm.',
+    });
+  } else {
+    warningMetrics.push({
+      name: 'Mỡ nội tạng (An toàn)',
+      value: `Cấp ${latest.visceralFat}`,
+      standard: 'Cấp 1 - 4',
+      level: 'safe',
+      risk: 'Chỉ số mỡ nội tạng ở ngưỡng an toàn, bảo vệ tốt các cơ quan nội tạng.',
+    });
+  }
+
+  // 2. Cảnh báo Lão hóa sinh học (Tuổi sinh học vs Tuổi thực)
+  const ageDelta = latest.biologicalAge - profile.age;
+  if (ageDelta >= 5) {
+    warningMetrics.push({
+      name: 'Tuổi sinh học (Lão hóa sâu)',
+      value: `${latest.biologicalAge} tuổi (Chênh +${ageDelta} tuổi)`,
+      standard: `Bằng hoặc trẻ hơn tuổi thực (${profile.age} tuổi)`,
+      level: 'danger',
+      risk: 'Tốc độ trao đổi chất suy giảm nghiêm trọng, suy giảm hormone nội sinh và tích lũy gốc tự do.',
+    });
+  } else if (ageDelta >= 2) {
+    warningMetrics.push({
+      name: 'Tuổi sinh học (Lão hóa sớm)',
+      value: `${latest.biologicalAge} tuổi (Chênh +${ageDelta} tuổi)`,
+      standard: `≤ ${profile.age} tuổi`,
+      level: 'warning',
+      risk: 'Chuyển hóa nền chậm, biểu hiện cơ thể thiếu ngủ, stress hoặc tích mỡ thụ động.',
+    });
+  } else {
+    warningMetrics.push({
+      name: 'Tuổi sinh học',
+      value: `${latest.biologicalAge} tuổi (${ageDelta < 0 ? `Trẻ hơn ${Math.abs(ageDelta)} tuổi` : 'Tương đương tuổi thực'})`,
+      standard: `≤ ${profile.age} tuổi`,
+      level: 'safe',
+      risk: 'Tốc độ chuyển hóa tế bào đang ở trạng thái trẻ hóa tốt.',
+    });
+  }
+
+  // 3. Cảnh báo Cân nặng vs Ngưỡng chuẩn chiều cao
+  if (latest.weight > idealWeight.maxKg + 5) {
+    const overKg = Number((latest.weight - idealWeight.maxKg).toFixed(1));
+    warningMetrics.push({
+      name: 'Trọng lượng cơ thể (Thừa cân)',
+      value: `${latest.weight} kg`,
+      standard: `${idealWeight.minKg} - ${idealWeight.maxKg} kg (Chiều cao ${profile.height}m)`,
+      level: 'danger',
+      risk: `Vượt ${overKg}kg so với trần chuẩn; gia tăng tải trọng lên đĩa đệm cột sống và sụn khớp gối.`,
+    });
+  } else if (latest.weight > idealWeight.maxKg) {
+    const overKg = Number((latest.weight - idealWeight.maxKg).toFixed(1));
+    warningMetrics.push({
+      name: 'Trọng lượng cơ thể',
+      value: `${latest.weight} kg`,
+      standard: `${idealWeight.minKg} - ${idealWeight.maxKg} kg`,
+      level: 'warning',
+      risk: `Hơi vượt trần chuẩn ${overKg}kg, cần siết mỡ để đưa về khoảng tối ưu.`,
+    });
+  } else if (latest.weight < idealWeight.minKg) {
+    const underKg = Number((idealWeight.minKg - latest.weight).toFixed(1));
+    warningMetrics.push({
+      name: 'Trọng lượng cơ thể (Thiếu cân)',
+      value: `${latest.weight} kg`,
+      standard: `${idealWeight.minKg} - ${idealWeight.maxKg} kg`,
+      level: 'warning',
+      risk: `Dưới chuẩn ${underKg}kg; cơ thể có dấu hiệu thiếu năng lượng dự trữ và hệ miễn dịch kém.`,
+    });
+  }
+
+  // 4. Cảnh báo Lượng nước sinh học
+  const minOptimalWater = profile.gender === 'Nữ' ? 50 : 55;
+  if (latest.bodyWater < minOptimalWater - 3) {
+    warningMetrics.push({
+      name: 'Tỷ lệ nước cơ thể (Thiếu hụt)',
+      value: `${latest.bodyWater} %`,
+      standard: `${minOptimalWater} - ${profile.gender === 'Nữ' ? 55 : 65} %`,
+      level: 'danger',
+      risk: 'Máu cô đặc, giảm hiệu suất vận chuyển oxy đến sợi cơ, thận giảm tốc độ lọc độc tố.',
+    });
+  } else if (latest.bodyWater < minOptimalWater) {
+    warningMetrics.push({
+      name: 'Tỷ lệ nước cơ thể',
+      value: `${latest.bodyWater} %`,
+      standard: `${minOptimalWater} - ${profile.gender === 'Nữ' ? 55 : 65} %`,
+      level: 'warning',
+      risk: 'Chưa đạt mức tối ưu cho quá trình đốt mỡ và đồng hóa protein cơ bắp.',
+    });
+  }
+
+  // ==========================================
+  // PHẦN 2: ĐÁNH GIÁ CHUYÊN SÂU (deepAssessment)
+  // ==========================================
+  const bodyTypeDef = Object.values(BODY_TYPE_DEFINITIONS).find(
+    (b) => b.code.toLowerCase() === latest.bodyType.toLowerCase() || b.name.includes(latest.bodyType)
+  );
+
+  const overview = `Học viên ${profile.fullName} (${profile.gender}, ${profile.age} tuổi) hiện được phân loại thể hình "${latest.bodyType}" (Cấp ${bodyTypeDef?.index || 5}/9). Thể trạng: ${bodyTypeDef?.description || 'Các chỉ số cân đối tương đối.'}`;
+
+  const muscleRatio = ((latest.muscleMass / latest.weight) * 100).toFixed(1);
+  const bodyCompositionAnalysis = `Khối lượng cơ bắp đạt ${latest.muscleMass}kg (${muscleRatio}% thể trọng), mỡ dưới da ${latest.subcutaneousFat}%, canxi xương đạt ${latest.boneCalcium} (chuẩn: ${boneStandard.targetBoneKg}kg). Lượng nước cơ thể ghi nhận ${latest.bodyWater}%. ${latest.muscleMass < (profile.gender === 'Nam' ? 32 : 21) ? 'Khối cơ bắp đang ở mức thấp so với khung xương, cần kích hoạt tăng cơ.' : 'Khối cơ bắp phát triển tốt.'}`;
+
+  const visceralAndAgingRisk = `Mỡ nội tạng đo được cấp ${latest.visceralFat} (${visceralEval.label}): ${visceralEval.assessment}. Tuổi sinh học ${latest.biologicalAge} tuổi so với tuổi thực ${profile.age} tuổi (${ageDelta > 0 ? `chênh +${ageDelta} tuổi, tốc độ chuyển hóa đang bị suy giảm` : 'chuyển hóa nội sinh đang trẻ hóa tốt'}). ${visceralEval.associatedRisks.length > 0 ? `Nguy cơ bệnh lý cần kiểm soát: ${visceralEval.associatedRisks.join('; ')}.` : 'Không ghi nhận nguy cơ bệnh lý chuyển hóa cấp tính.'}`;
+
+  let progressComparison = 'Khởi điểm ghi nhận lần đo đầu tiên trong hệ thống.';
   if (previous) {
     const dWeight = Number((latest.weight - previous.weight).toFixed(1));
     const dMuscle = Number((latest.muscleMass - previous.muscleMass).toFixed(1));
     const dFat = Number((latest.subcutaneousFat - previous.subcutaneousFat).toFixed(1));
     const dVisceral = latest.visceralFat - previous.visceralFat;
-
     const parts: string[] = [];
     if (dWeight !== 0) parts.push(`Cân nặng ${dWeight > 0 ? `tăng +${dWeight}` : `giảm ${dWeight}`}kg`);
     if (dMuscle !== 0) parts.push(`Cơ bắp ${dMuscle > 0 ? `tăng +${dMuscle}` : `giảm ${dMuscle}`}kg`);
     if (dFat !== 0) parts.push(`Mỡ dưới da ${dFat > 0 ? `tăng +${dFat}` : `giảm ${dFat}`}%`);
     if (dVisceral !== 0) parts.push(`Mỡ nội tạng ${dVisceral > 0 ? `tăng +${dVisceral}` : `hạ ${dVisceral}`} cấp`);
 
-    changeSummary = parts.length > 0
-      ? `Biến động so với lần đo trước (${previous.date}): ${parts.join(', ')}.`
-      : 'Các chỉ số thể trạng tương đối ổn định so với lần đo gần nhất.';
-  } else {
-    changeSummary = `Khởi điểm ghi nhận ngày ${latest.date}: Cân nặng ${latest.weight}kg, Thể hình phân loại "${latest.bodyType}".`;
+    progressComparison = parts.length > 0
+      ? `So với lần đo trước (${previous.date}): ${parts.join(', ')}.`
+      : 'Thể trạng ổn định so với lần đo liền kề.';
   }
 
-  // Weight vs Ideal Table Evaluation
-  let weightAnalysis = '';
-  if (latest.weight > idealWeight.maxKg) {
-    const overKg = Number((latest.weight - idealWeight.maxKg).toFixed(1));
-    weightAnalysis = `Hiện tại ${latest.weight}kg, vượt ${overKg}kg so với ngưỡng lý tưởng chuẩn bảng (${idealWeight.minKg} - ${idealWeight.maxKg}kg cho chiều cao ${profile.height}m).`;
-  } else if (latest.weight < idealWeight.minKg) {
-    const underKg = Number((idealWeight.minKg - latest.weight).toFixed(1));
-    weightAnalysis = `Hiện tại ${latest.weight}kg, thấp hơn ${underKg}kg so với mức chuẩn bảng (${idealWeight.minKg} - ${idealWeight.maxKg}kg). Cần tăng cân tăng cơ nạp năng lượng sạch.`;
-  } else {
-    weightAnalysis = `Cân nặng ${latest.weight}kg đang nằm hoàn hảo trong dải lý tưởng chuẩn (${idealWeight.minKg} - ${idealWeight.maxKg}kg).`;
-  }
+  // ==========================================
+  // PHẦN 3: KHUYẾN NGHỊ HÀNH ĐỘNG CỤ THỂ (actionRecommendations)
+  // ==========================================
+  const actionRecommendations: ActionRecommendationItem[] = [];
 
-  // Visceral Fat & Pathological Risk Evaluation from Center Chart
-  let visceralAnalysis = `Mỡ nội tạng: Cấp ${latest.visceralFat} (${visceralEval.label}). ${visceralEval.assessment}`;
-  if (visceralEval.associatedRisks.length > 0) {
-    visceralAnalysis += ` Các nguy cơ bệnh lý cần phòng ngừa: ${visceralEval.associatedRisks.join('; ')}.`;
-  }
+  // Dinh dưỡng (Dựa trên Cân nặng hiện tại, Cân nặng mục tiêu, Thời gian mong muốn & Mức mỡ nội tạng)
+  const proteinTargetGrams = calorieAnalysis.recommendedMacros.proteinGrams;
+  const visceralActionContext = `, kết hợp mức mỡ nội tạng cấp ${latest.visceralFat}${calorieAnalysis.targetVisceralFat ? ` (mục tiêu cấp ${calorieAnalysis.targetVisceralFat})` : ''}`;
+  const calorieActionPrefix =
+    calorieAnalysis.mode === 'weight_loss'
+      ? `Mức Calo TỐI ĐA nạp mỗi ngày: ${calorieTarget} Kcal/ngày (để giảm ${calorieAnalysis.weightDiffKg}kg từ ${calorieAnalysis.currentWeightKg}kg xuống ${calorieAnalysis.targetWeightKg}kg trong ${calorieAnalysis.durationWeeks} tuần${visceralActionContext}, thâm hụt ${Math.abs(calorieAnalysis.dailyCalorieAdjustment)} Kcal/ngày so với TDEE ${calorieAnalysis.tdee} Kcal).`
+      : calorieAnalysis.mode === 'weight_gain'
+      ? `Mức Calo TỐI THIỂU nạp mỗi ngày: ${calorieTarget} Kcal/ngày (để tăng +${calorieAnalysis.weightDiffKg}kg từ ${calorieAnalysis.currentWeightKg}kg lên ${calorieAnalysis.targetWeightKg}kg trong ${calorieAnalysis.durationWeeks} tuần${visceralActionContext}, thặng dư +${calorieAnalysis.dailyCalorieAdjustment} Kcal/ngày so với TDEE ${calorieAnalysis.tdee} Kcal).`
+      : `Mức Calo duy trì mỗi ngày: ${calorieTarget} Kcal/ngày (cân bằng TDEE ${calorieAnalysis.tdee} Kcal để giữ mốc ${calorieAnalysis.currentWeightKg}kg${visceralActionContext}).`;
 
-  // Nutrition Advice
-  let nutritionAdvice = `Mục tiêu dinh dưỡng: Nạp ${calorieTarget} Kcal/ngày. Ưu tiên đạm nạc (1.6 - 2.0g/kg thể trọng), rau xanh lá giàu xơ, tinh bột phức và bổ sung canxi (ngưỡng xương chuẩn: ${boneStandard.targetBoneKg}kg).`;
-  if (latest.visceralFat >= 9) {
-    nutritionAdvice += ' Cắt giảm triệt để đường tinh luyện, nước ngọt có ga, bia rượu và thức ăn xào rán để đảo ngược quá trình tích mỡ nội tạng quanh tim gan.';
-  }
+  actionRecommendations.push({
+    area: 'Dinh dưỡng',
+    action: `${calorieActionPrefix} Bổ sung ${proteinTargetGrams}g Protein, ${calorieAnalysis.recommendedMacros.carbsGrams}g Tinh bột và ${calorieAnalysis.recommendedMacros.fatGrams}g Chất béo tốt mỗi ngày.`,
+    target:
+      calorieAnalysis.mode === 'weight_loss'
+        ? `Tối đa ${calorieTarget} Kcal/ngày • ${proteinTargetGrams}g Protein`
+        : calorieAnalysis.mode === 'weight_gain'
+        ? `Tối thiểu ${calorieTarget} Kcal/ngày • ${proteinTargetGrams}g Protein`
+        : `${calorieTarget} Kcal/ngày • ${proteinTargetGrams}g Protein`,
+    notes: latest.visceralFat >= 8
+      ? 'Cắt bỏ hoàn toàn đường tinh luyện, nước ngọt có ga, bánh kẹo và đồ chiên ngập dầu để đảo ngược mỡ nội tạng.'
+      : 'Ưu tiên tinh bột chậm (gạo lứt, khoai lang, yến mạch) và bổ sung 300g rau xanh/ngày.',
+  });
 
-  // Workout Advice
-  let workoutAdvice = `Phác đồ rèn luyện: 4-5 buổi/tuần. Kết hợp tập kháng lực lũy tiến (Hypertrophy) 3 buổi và 2 buổi Cardio ngắt quãng (HIIT) 20-30 phút để đốt mỡ sâu.`;
-  if (latest.muscleMass < (profile.gender === 'Nam' ? 32 : 21)) {
-    workoutAdvice += ' Tập trung nhóm bài đa khớp (Squat, Deadlift, Bench Press, Lats Pull) để kích hoạt tối đa các sợi cơ lớn.';
-  }
+  // Tập luyện
+  actionRecommendations.push({
+    area: 'Tập luyện',
+    action: latest.visceralFat >= 8
+      ? 'Lịch tập 4-5 buổi/tuần: Kết hợp 3 buổi kháng lực đa khớp (Compound Lifting) và 2 buổi Cardio ngắt quãng cường độ cao (HIIT) 25 phút.'
+      : 'Lịch tập 3-4 buổi/tuần: Tập trung phát triển khối cơ (Hypertrophy) với các bài Squat, Deadlift, Bench Press, Lats Pull-down.',
+    target: '4 - 5 buổi/tuần • 45 - 60 phút/buổi',
+    notes: 'Khởi động kỹ khớp gối và cột sống trước buổi tập; kéo giãn cơ sau tập 10 phút.',
+  });
 
-  // Lifestyle Tip
-  const lifestyleTip = `Duy trì uống tối thiểu ${waterTarget}L nước lọc mỗi ngày theo bảng khuyến nghị thể trọng. Ngủ trước 23h00 để phục hồi tế bào và hạ mức tuổi sinh học (hiện tại: ${latest.biologicalAge} tuổi).`;
+  // Lối sống & Chuyển hóa
+  actionRecommendations.push({
+    area: 'Lối sống & Chuyển hóa',
+    action: `Duy trì lượng nước lọc tối thiểu ${waterTarget} Lít/ngày (uống đều 250ml mỗi 2 tiếng). Ngủ đủ 7-8 tiếng và bắt buộc lên giường trước 23h00.`,
+    target: `${waterTarget} Lít nước/ngày • Ngủ trước 23h00`,
+    notes: 'Giúp hạ cortisol (hormone gây tích mỡ bụng) và kích hoạt hormone tăng trưởng GH phục hồi cơ bắp.',
+  });
 
-  const summary = `${changeSummary} ${weightAnalysis} ${visceralAnalysis}`;
+  const summary = `${progressComparison} ${overview} ${visceralAndAgingRisk}`;
+  const nutritionAdvice = actionRecommendations[0].action;
+  const workoutAdvice = actionRecommendations[1].action;
+  const lifestyleTip = actionRecommendations[2].action;
 
   return {
+    warningMetrics,
+    deepAssessment: {
+      overview,
+      bodyCompositionAnalysis,
+      visceralAndAgingRisk,
+      progressComparison,
+    },
+    actionRecommendations,
+    calorieAnalysis,
     summary,
     nutritionAdvice,
     workoutAdvice,

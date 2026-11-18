@@ -10,34 +10,12 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
-import {
-  SEED_STUDENTS,
-  SEED_METRICS,
-  SEED_ADVICES,
-  SEED_MEALS,
-  SEED_WORKOUTS,
-  SEED_PHOTOS,
-  SEED_BADGES,
-  SEED_NOTIFICATIONS,
-} from './src/data/seedData.ts';
+import { calculateCalorieGoalBreakdown } from './src/utils/healthCalculations.ts';
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// Shared Google Gen AI Client (Server-side only)
-const aiClient = process.env.GEMINI_API_KEY
-  ? new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    })
-  : null;
-
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
@@ -45,25 +23,161 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const getErrMessage = (err: unknown): string =>
   err instanceof Error ? err.message : String(err);
 
-app.use(express.json({ limit: '15mb' }));
+app.use(express.json({ limit: '5mb' }));
 
-// Enable CORS so static frontends (e.g. GitHub Pages) can communicate with the API
+// Enable CORS
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-auth-username');
+  res.header(
+    'Access-Control-Allow-Headers',
+    'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-auth-username'
+  );
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
   next();
 });
 
+// Helper to strip empty/null keys from JSONB objects so DB storage stays minimal
+function compactJson<T extends Record<string, any>>(obj: T | undefined | null): Record<string, any> {
+  if (!obj || typeof obj !== 'object') return {};
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined && v !== null && v !== '') {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+// Compact Server-Side Database Store (persisted to data/database.json & synced with PostgreSQL when reachable)
+interface CompactDatabaseStore {
+  wipedCleanV1: boolean;
+  users: Array<{
+    id: string;
+    username: string;
+    password: string;
+    fullName: string;
+    role: 'admin' | 'trainer' | 'student';
+    phone?: string;
+    studentId?: string | null;
+    trainerId?: string | null;
+    trainerName?: string;
+    avatarUrl?: string;
+    createdAt?: string;
+  }>;
+  students: any[];
+  metrics: any[];
+  advices: any[];
+  meals: any[];
+  workouts: any[];
+  photos: any[];
+  notifications: any[];
+}
+
+const DB_FILE_PATH = path.resolve(__dirname, 'data', 'database.json');
+
+function createEmptyStore(): CompactDatabaseStore {
+  const today = new Date().toISOString().split('T')[0];
+  return {
+    wipedCleanV1: true,
+    users: [
+      {
+        id: 'user-admin-1',
+        username: 'admin',
+        password: '123',
+        fullName: 'Quản Trị Viên (Admin)',
+        role: 'admin',
+        phone: '',
+        studentId: null,
+        trainerId: null,
+        avatarUrl: '',
+        createdAt: today,
+      },
+      {
+        id: 'user-trainer-1',
+        username: 'trunghbl',
+        password: '123',
+        fullName: 'Huấn Luyện Viên Trung HBL',
+        role: 'trainer',
+        phone: '',
+        studentId: null,
+        trainerId: null,
+        avatarUrl: '',
+        createdAt: today,
+      },
+    ],
+    students: [],
+    metrics: [],
+    advices: [],
+    meals: [],
+    workouts: [],
+    photos: [],
+    notifications: [],
+  };
+}
+
+function ensureAdminInStore(store: CompactDatabaseStore): CompactDatabaseStore {
+  if (!Array.isArray(store.users)) {
+    store.users = [];
+  }
+  const hasAdmin = store.users.some((u) => u.username.toLowerCase() === 'admin');
+  if (!hasAdmin) {
+    store.users.unshift({
+      id: 'user-admin-1',
+      username: 'admin',
+      password: '123',
+      fullName: 'Quản Trị Viên (Admin)',
+      role: 'admin',
+      phone: '',
+      studentId: null,
+      trainerId: null,
+      avatarUrl: '',
+      createdAt: new Date().toISOString().split('T')[0],
+    });
+    saveDiskStore(store);
+  }
+  return store;
+}
+
+function loadDiskStore(): CompactDatabaseStore {
+  try {
+    if (fs.existsSync(DB_FILE_PATH)) {
+      const raw = fs.readFileSync(DB_FILE_PATH, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.wipedCleanV1 === true) {
+        return ensureAdminInStore(parsed);
+      }
+    }
+  } catch (err) {
+    console.warn('Could not read disk DB file, initializing clean store:', getErrMessage(err));
+  }
+  const cleanStore = createEmptyStore();
+  saveDiskStore(cleanStore);
+  return cleanStore;
+}
+
+function saveDiskStore(store: CompactDatabaseStore) {
+  try {
+    const dir = path.dirname(DB_FILE_PATH);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    // Minified JSON without whitespace to minimize disk footprint
+    fs.writeFileSync(DB_FILE_PATH, JSON.stringify(store), 'utf-8');
+  } catch (err) {
+    console.warn('Could not write disk DB file:', getErrMessage(err));
+  }
+}
+
+const dbStore = loadDiskStore();
+
 // Aiven PostgreSQL Database Connection
 const rawConnectionString =
   process.env.DATABASE_URL ||
   'postgres://avnadmin:AVNS_mnHs58-ghj3A7pfXzVe@pg-1b132c35-chitrung7542-3ac1.i.aivencloud.com:21684/TramTap?sslmode=require';
 
-// Strip sslmode query parameter so pg driver respects rejectUnauthorized: false for Aiven TLS
 const cleanConnectionString = rawConnectionString.replace(/[?&]sslmode=[^&]+/, '');
 
 const pool = new Pool({
@@ -71,32 +185,38 @@ const pool = new Pool({
   ssl: {
     rejectUnauthorized: false,
   },
-  connectionTimeoutMillis: 10000,
+  connectionTimeoutMillis: 6000,
 });
 
 pool.on('error', (err) => {
-  console.warn('⚠️ Unexpected PostgreSQL pool error (auto-recovering on next query):', err.message);
+  console.warn('⚠️ Unexpected PostgreSQL pool error:', err.message);
 });
 
 let dbConnected = false;
-let inMemoryStudents = [...SEED_STUDENTS];
 
-// Initialize Database Tables and Auto-Seed
+// Initialize Database Tables and Wipe Sample Data (One-time Clean Reset)
 async function initDatabase() {
   try {
     const client = await pool.connect();
     dbConnected = true;
     console.log('✅ Connected to Aiven PostgreSQL database: TramTap');
 
-    // Create Tables conforming to SRS specs
     await client.query(`
+      CREATE TABLE IF NOT EXISTS system_settings (
+        key VARCHAR(64) PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+
       CREATE TABLE IF NOT EXISTS users (
         id VARCHAR(64) PRIMARY KEY,
         username VARCHAR(50) UNIQUE NOT NULL,
         password VARCHAR(100) NOT NULL,
         full_name VARCHAR(100) NOT NULL,
         role VARCHAR(20) NOT NULL,
+        phone VARCHAR(20),
         student_id VARCHAR(64),
+        trainer_id VARCHAR(64),
         avatar_url TEXT,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
@@ -113,6 +233,8 @@ async function initDatabase() {
         health_goal TEXT NOT NULL,
         target_metrics JSONB DEFAULT '{}'::jsonb,
         avatar_url TEXT,
+        trainer_id VARCHAR(64),
+        trainer_name VARCHAR(100),
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
 
@@ -209,55 +331,698 @@ async function initDatabase() {
       );
     `);
 
-    // Ensure newly added columns exist in meal_logs and students tables
+    // Add multi-trainer & ownership columns if upgrading an existing database
     await client.query(`
-      ALTER TABLE students ADD COLUMN IF NOT EXISTS drive_folder_url TEXT;
-      ALTER TABLE meal_logs ADD COLUMN IF NOT EXISTS drive_folder_url TEXT;
-      ALTER TABLE meal_logs ADD COLUMN IF NOT EXISTS drive_file_url TEXT;
-      ALTER TABLE meal_logs ADD COLUMN IF NOT EXISTS ai_analyzed BOOLEAN DEFAULT TRUE;
-      ALTER TABLE meal_logs ADD COLUMN IF NOT EXISTS nutrition_advice TEXT;
-      ALTER TABLE meal_logs ADD COLUMN IF NOT EXISTS items JSONB DEFAULT '[]'::jsonb;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(20);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS trainer_id VARCHAR(64);
+      ALTER TABLE students ADD COLUMN IF NOT EXISTS trainer_id VARCHAR(64);
+      ALTER TABLE students ADD COLUMN IF NOT EXISTS trainer_name VARCHAR(100);
+      ALTER TABLE students DROP COLUMN IF EXISTS drive_folder_url;
+      ALTER TABLE meal_logs DROP COLUMN IF EXISTS drive_folder_url;
+      ALTER TABLE meal_logs DROP COLUMN IF EXISTS drive_file_url;
+      ALTER TABLE meal_logs DROP COLUMN IF EXISTS ai_analyzed;
+      ALTER TABLE meal_logs DROP COLUMN IF EXISTS nutrition_advice;
+      ALTER TABLE meal_logs DROP COLUMN IF EXISTS items;
     `);
 
-    // Purge any heavy Base64 image data from meal_logs so DB storage stays lightweight (only store Drive/URL links)
-    await client.query(`
-      UPDATE meal_logs
-      SET image_url = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80'
-      WHERE image_url LIKE 'data:image/%';
-    `);
+    // One-time clean wipe of all sample/existing records in the database
+    const resetCheck = await client.query(
+      `SELECT value FROM system_settings WHERE key = 'db_wiped_clean_v1'`
+    );
+    if (resetCheck.rows.length === 0) {
+      console.log('🧹 Wiping all existing/sample data from PostgreSQL database...');
+      await client.query(`
+        TRUNCATE TABLE
+          health_metrics,
+          ai_advices,
+          meal_logs,
+          workout_logs,
+          physique_photos,
+          badges,
+          smart_notifications,
+          students
+        RESTART IDENTITY CASCADE;
+      `);
+      await client.query(`DELETE FROM users WHERE role NOT IN ('admin', 'trainer');`);
+      await client.query(
+        `INSERT INTO system_settings (key, value) VALUES ('db_wiped_clean_v1', 'true')
+         ON CONFLICT (key) DO UPDATE SET value = 'true', updated_at = NOW()`
+      );
+      console.log('✅ All sample/old records cleared from PostgreSQL database.');
+    }
 
-    // Check if students exist, if not seed initial data
-    const res = await client.query('SELECT COUNT(*) FROM students');
-    const count = parseInt(res.rows[0].count, 10);
-    if (count === 0) {
-      console.log('🌱 Database empty, seeding initial records from SRS...');
-      for (const s of SEED_STUDENTS) {
-        await client.query(
-          `INSERT INTO students (id, full_name, gender, age, height, phone, address, date_of_birth, health_goal, target_metrics, avatar_url, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-           ON CONFLICT (id) DO NOTHING`,
+    // Ensure default admin account (tk: admin, mk: 123) exists in DB
+    await client.query(
+      `INSERT INTO users (id, username, password, full_name, role, phone, student_id, trainer_id, avatar_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (username) DO UPDATE SET role = 'admin'`,
+      [
+        'user-admin-1',
+        'admin',
+        '123',
+        'Quản Trị Viên (Admin)',
+        'admin',
+        '',
+        null,
+        null,
+        '',
+      ]
+    );
+
+    // Ensure default trainer account exists in DB
+    await client.query(
+      `INSERT INTO users (id, username, password, full_name, role, phone, student_id, trainer_id, avatar_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (username) DO NOTHING`,
+      [
+        'user-trainer-1',
+        'trunghbl',
+        '123',
+        'Huấn Luyện Viên Trung HBL',
+        'trainer',
+        '',
+        null,
+        null,
+        '',
+      ]
+    );
+
+    client.release();
+  } catch (err) {
+    console.warn('⚠️ PostgreSQL remote host unreachable, using local database engine (data/database.json).');
+    dbConnected = false;
+  }
+}
+
+// Auth API: Login (Strictly from Database)
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Vui lòng nhập tên đăng nhập và mật khẩu!' });
+    }
+
+    const cleanUsername = username.trim().toLowerCase();
+    const cleanPassword = password.trim();
+
+    if (dbConnected) {
+      try {
+        const result = await pool.query(
+          'SELECT id, username, full_name, role, phone, student_id, trainer_id, avatar_url FROM users WHERE LOWER(username) = $1 AND password = $2',
+          [cleanUsername, cleanPassword]
+        );
+        if (result.rows.length > 0) {
+          const u = result.rows[0];
+          return res.json({
+            success: true,
+            user: {
+              id: u.id,
+              username: u.username,
+              fullName: u.full_name,
+              role: u.role,
+              phone: u.phone || '',
+              studentId: u.student_id,
+              trainerId: u.trainer_id,
+              avatarUrl: u.avatar_url || '',
+            },
+          });
+        }
+      } catch {
+        dbConnected = false;
+      }
+    }
+
+    const matchedUser = dbStore.users.find(
+      (u) => u.username.toLowerCase() === cleanUsername && u.password === cleanPassword
+    );
+    if (matchedUser) {
+      return res.json({
+        success: true,
+        user: {
+          id: matchedUser.id,
+          username: matchedUser.username,
+          fullName: matchedUser.fullName,
+          role: matchedUser.role,
+          phone: matchedUser.phone || '',
+          studentId: matchedUser.studentId,
+          trainerId: matchedUser.trainerId,
+          avatarUrl: matchedUser.avatarUrl || '',
+        },
+      });
+    }
+
+    return res.status(401).json({ error: 'Tên đăng nhập hoặc mật khẩu không chính xác!' });
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrMessage(err) });
+  }
+});
+
+// Users & Trainers Management API (Stored in Database)
+app.get('/api/users', async (req, res) => {
+  try {
+    if (dbConnected) {
+      try {
+        const result = await pool.query(
+          'SELECT id, username, password, full_name, role, phone, student_id, trainer_id, created_at FROM users ORDER BY created_at DESC'
+        );
+        const users = result.rows.map((r) => ({
+          id: r.id,
+          username: r.username,
+          password: r.password,
+          fullName: r.full_name,
+          role: r.role as 'admin' | 'trainer' | 'student',
+          phone: r.phone || '',
+          studentId: r.student_id || null,
+          trainerId: r.trainer_id || null,
+          createdAt: r.created_at
+            ? new Date(r.created_at).toISOString().split('T')[0]
+            : '',
+        }));
+        dbStore.users = users;
+        saveDiskStore(dbStore);
+        return res.json(users);
+      } catch {
+        dbConnected = false;
+      }
+    }
+    res.json(dbStore.users);
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrMessage(err) });
+  }
+});
+
+app.post('/api/users', async (req, res) => {
+  try {
+    const { username, password, fullName, role, phone, studentId, trainerId } = req.body;
+    const cleanUsername = String(username || '').trim();
+    const cleanPassword = String(password || '123').trim();
+    const cleanName = String(fullName || '').trim();
+    const validRole: 'admin' | 'trainer' | 'student' =
+      role === 'admin' || role === 'trainer' || role === 'student' ? role : 'trainer';
+
+    if (!cleanUsername || !cleanName) {
+      return res
+        .status(400)
+        .json({ error: 'Vui lòng nhập đầy đủ Họ tên và Tên đăng nhập!' });
+    }
+
+    const exists = dbStore.users.some(
+      (u) => u.username.toLowerCase() === cleanUsername.toLowerCase()
+    );
+    if (exists) {
+      return res.status(400).json({ error: `Tên đăng nhập "${cleanUsername}" đã tồn tại!` });
+    }
+
+    const newUser = {
+      id: `user-${validRole}-${Date.now()}`,
+      username: cleanUsername,
+      password: cleanPassword,
+      fullName: cleanName,
+      role: validRole,
+      phone: String(phone || '').trim(),
+      studentId: studentId || null,
+      trainerId: trainerId || null,
+      avatarUrl: '',
+      createdAt: new Date().toISOString().split('T')[0],
+    };
+
+    dbStore.users = [newUser, ...dbStore.users];
+    saveDiskStore(dbStore);
+
+    if (dbConnected) {
+      try {
+        await pool.query(
+          `INSERT INTO users (id, username, password, full_name, role, phone, student_id, trainer_id, avatar_url)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (username) DO UPDATE SET
+             password = EXCLUDED.password,
+             full_name = EXCLUDED.full_name,
+             role = EXCLUDED.role,
+             phone = EXCLUDED.phone,
+             trainer_id = EXCLUDED.trainer_id`,
           [
-            s.id,
+            newUser.id,
+            newUser.username,
+            newUser.password,
+            newUser.fullName,
+            newUser.role,
+            newUser.phone,
+            newUser.studentId,
+            newUser.trainerId,
+            '',
+          ]
+        );
+      } catch {
+        dbConnected = false;
+      }
+    }
+
+    res.status(201).json(newUser);
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrMessage(err) });
+  }
+});
+
+app.put('/api/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { username, password, fullName, role, phone, trainerId } = req.body;
+    const existing = dbStore.users.find((u) => u.id === id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Không tìm thấy tài khoản người dùng!' });
+    }
+
+    const nextUsername = username ? String(username).trim() : existing.username;
+    const duplicate = dbStore.users.some(
+      (u) => u.id !== id && u.username.toLowerCase() === nextUsername.toLowerCase()
+    );
+    if (duplicate) {
+      return res.status(400).json({ error: `Tên đăng nhập "${nextUsername}" đã được sử dụng!` });
+    }
+
+    const updatedUser = {
+      ...existing,
+      username: nextUsername,
+      password: password ? String(password).trim() : existing.password,
+      fullName: fullName ? String(fullName).trim() : existing.fullName,
+      role:
+        role === 'admin' || role === 'trainer' || role === 'student'
+          ? role
+          : existing.role,
+      phone: phone !== undefined ? String(phone).trim() : existing.phone,
+      trainerId: trainerId !== undefined ? trainerId : existing.trainerId,
+    };
+
+    dbStore.users = dbStore.users.map((u) => (u.id === id ? updatedUser : u));
+
+    // If this user is a trainer and their name changed, sync trainerName on their students
+    if (updatedUser.role === 'trainer' && fullName) {
+      dbStore.students = dbStore.students.map((s) =>
+        s.trainerId === id ? { ...s, trainerName: updatedUser.fullName } : s
+      );
+    }
+
+    saveDiskStore(dbStore);
+
+    if (dbConnected) {
+      try {
+        await pool.query(
+          `UPDATE users SET username = $1, password = $2, full_name = $3, role = $4, phone = $5, trainer_id = $6 WHERE id = $7`,
+          [
+            updatedUser.username,
+            updatedUser.password,
+            updatedUser.fullName,
+            updatedUser.role,
+            updatedUser.phone || '',
+            updatedUser.trainerId || null,
+            id,
+          ]
+        );
+        if (updatedUser.role === 'trainer' && fullName) {
+          await pool.query(
+            `UPDATE students SET trainer_name = $1 WHERE trainer_id = $2`,
+            [updatedUser.fullName, id]
+          );
+        }
+      } catch {
+        dbConnected = false;
+      }
+    }
+
+    res.json(updatedUser);
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrMessage(err) });
+  }
+});
+
+app.delete('/api/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const target = dbStore.users.find((u) => u.id === id);
+    if (target?.username.toLowerCase() === 'admin') {
+      return res.status(400).json({ error: 'Không thể xóa tài khoản Admin gốc của hệ thống!' });
+    }
+
+    dbStore.users = dbStore.users.filter((u) => u.id !== id);
+    saveDiskStore(dbStore);
+
+    if (dbConnected) {
+      try {
+        await pool.query('DELETE FROM users WHERE id = $1', [id]);
+      } catch {
+        dbConnected = false;
+      }
+    }
+
+    res.json({ success: true });
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrMessage(err) });
+  }
+});
+
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    databaseConnected: true,
+    dbType: dbConnected ? 'PostgreSQL (Aiven Cloud)' : 'Local Database (TramTap)',
+    databaseName: 'TramTap',
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Students API
+app.get('/api/students', async (req, res) => {
+  try {
+    if (dbConnected) {
+      const result = await pool.query('SELECT * FROM students ORDER BY created_at DESC');
+      const students = result.rows.map((r) => ({
+        id: r.id,
+        fullName: r.full_name,
+        gender: r.gender,
+        age: r.age,
+        height: parseFloat(r.height),
+        phone: r.phone,
+        address: r.address || '',
+        dateOfBirth: r.date_of_birth ? new Date(r.date_of_birth).toISOString().split('T')[0] : '',
+        healthGoal: r.health_goal,
+        targetMetrics: r.target_metrics || {},
+        avatarUrl: r.avatar_url || '',
+        trainerId: r.trainer_id || '',
+        trainerName: r.trainer_name || '',
+        createdAt: r.created_at,
+      }));
+      dbStore.students = students;
+      saveDiskStore(dbStore);
+      return res.json(students);
+    }
+    res.json(dbStore.students);
+  } catch {
+    dbConnected = false;
+    res.json(dbStore.students);
+  }
+});
+
+app.post('/api/students', async (req, res) => {
+  try {
+    const s = req.body;
+    const studentId = s.id || `student-${Date.now()}`;
+    const initialUsername = (s.initialUsername || s.phone || studentId).trim();
+    const initialPassword = (s.initialPassword || '123').trim();
+    const safeDob = s.dateOfBirth && String(s.dateOfBirth).trim() ? s.dateOfBirth : '2000-01-01';
+    const safeGoal =
+      s.healthGoal && String(s.healthGoal).trim()
+        ? s.healthGoal.trim()
+        : 'Cân đối vóc dáng & Cải thiện sức khỏe';
+
+    // Resolve trainer ownership
+    const trainerUser = dbStore.users.find(
+      (u) =>
+        (s.trainerId && u.id === s.trainerId) ||
+        (req.headers['x-auth-username'] &&
+          u.username.toLowerCase() === String(req.headers['x-auth-username']).toLowerCase() &&
+          u.role === 'trainer')
+    );
+    const resolvedTrainerId = s.trainerId || trainerUser?.id || '';
+    const resolvedTrainerName = s.trainerName || trainerUser?.fullName || '';
+
+    const newStudentRecord = {
+      id: studentId,
+      fullName: String(s.fullName || '').trim(),
+      gender: s.gender || 'Nam',
+      age: Number(s.age) || 25,
+      height: Number(s.height) || 1.7,
+      phone: String(s.phone || '').trim().slice(0, 20),
+      address: String(s.address || '').trim().slice(0, 255),
+      dateOfBirth: safeDob,
+      healthGoal: safeGoal,
+      targetMetrics: compactJson(s.targetMetrics),
+      avatarUrl: s.avatarUrl || '',
+      trainerId: resolvedTrainerId,
+      trainerName: resolvedTrainerName,
+      createdAt: s.createdAt || new Date().toISOString().split('T')[0],
+    };
+
+    // Save to disk database
+    dbStore.students = [
+      newStudentRecord,
+      ...dbStore.students.filter((item) => item.id !== studentId),
+    ];
+    dbStore.users = [
+      ...dbStore.users.filter(
+        (u) =>
+          u.username.toLowerCase() !== initialUsername.toLowerCase() &&
+          u.studentId !== newStudentRecord.id
+      ),
+      {
+        id: `user-${newStudentRecord.id}`,
+        username: initialUsername,
+        password: initialPassword,
+        fullName: newStudentRecord.fullName,
+        role: 'student',
+        phone: newStudentRecord.phone,
+        studentId: newStudentRecord.id,
+        trainerId: resolvedTrainerId || null,
+        avatarUrl: newStudentRecord.avatarUrl,
+        createdAt: newStudentRecord.createdAt,
+      },
+    ];
+    saveDiskStore(dbStore);
+
+    if (dbConnected) {
+      try {
+        await pool.query(
+          `INSERT INTO students (id, full_name, gender, age, height, phone, address, date_of_birth, health_goal, target_metrics, avatar_url, trainer_id, trainer_name, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+           ON CONFLICT (id) DO UPDATE SET
+             full_name = EXCLUDED.full_name,
+             gender = EXCLUDED.gender,
+             age = EXCLUDED.age,
+             height = EXCLUDED.height,
+             phone = EXCLUDED.phone,
+             address = EXCLUDED.address,
+             date_of_birth = EXCLUDED.date_of_birth,
+             health_goal = EXCLUDED.health_goal,
+             target_metrics = EXCLUDED.target_metrics,
+             avatar_url = EXCLUDED.avatar_url,
+             trainer_id = EXCLUDED.trainer_id,
+             trainer_name = EXCLUDED.trainer_name`,
+          [
+            newStudentRecord.id,
+            newStudentRecord.fullName,
+            newStudentRecord.gender,
+            newStudentRecord.age,
+            newStudentRecord.height,
+            newStudentRecord.phone,
+            newStudentRecord.address,
+            newStudentRecord.dateOfBirth,
+            newStudentRecord.healthGoal,
+            JSON.stringify(newStudentRecord.targetMetrics),
+            newStudentRecord.avatarUrl,
+            newStudentRecord.trainerId || null,
+            newStudentRecord.trainerName || null,
+            new Date().toISOString(),
+          ]
+        );
+
+        await pool.query(
+          `INSERT INTO users (id, username, password, full_name, role, phone, student_id, trainer_id, avatar_url)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (username) DO UPDATE SET
+             password = EXCLUDED.password,
+             full_name = EXCLUDED.full_name,
+             phone = EXCLUDED.phone,
+             student_id = EXCLUDED.student_id,
+             trainer_id = EXCLUDED.trainer_id`,
+          [
+            `user-${newStudentRecord.id}`,
+            initialUsername,
+            initialPassword,
+            newStudentRecord.fullName,
+            'student',
+            newStudentRecord.phone,
+            newStudentRecord.id,
+            newStudentRecord.trainerId || null,
+            newStudentRecord.avatarUrl,
+          ]
+        );
+      } catch {
+        dbConnected = false;
+      }
+    }
+
+    res.status(201).json({ ...newStudentRecord, initialUsername, initialPassword });
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrMessage(err) });
+  }
+});
+
+app.put('/api/students/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const s = req.body;
+    const trainerUser = s.trainerId
+      ? dbStore.users.find((u) => u.id === s.trainerId)
+      : undefined;
+    const resolvedTrainerName =
+      s.trainerName !== undefined
+        ? s.trainerName
+        : trainerUser
+        ? trainerUser.fullName
+        : '';
+
+    const updatedStudent = {
+      ...s,
+      id,
+      trainerId: s.trainerId || '',
+      trainerName: resolvedTrainerName,
+      targetMetrics: compactJson(s.targetMetrics),
+    };
+    dbStore.students = dbStore.students.map((item) =>
+      item.id === id ? { ...item, ...updatedStudent } : item
+    );
+    // Sync trainerId and fullName on the student's user account
+    dbStore.users = dbStore.users.map((u) =>
+      u.studentId === id
+        ? {
+            ...u,
+            fullName: s.fullName || u.fullName,
+            phone: s.phone || u.phone,
+            trainerId: s.trainerId || null,
+          }
+        : u
+    );
+    saveDiskStore(dbStore);
+
+    if (dbConnected) {
+      try {
+        await pool.query(
+          `UPDATE students SET
+            full_name = $1, gender = $2, age = $3, height = $4, phone = $5,
+            address = $6, date_of_birth = $7, health_goal = $8, target_metrics = $9, avatar_url = $10,
+            trainer_id = $11, trainer_name = $12
+           WHERE id = $13`,
+          [
             s.fullName,
             s.gender,
             s.age,
             s.height,
             s.phone,
             s.address || '',
-            s.dateOfBirth,
+            s.dateOfBirth || '2000-01-01',
             s.healthGoal,
-            JSON.stringify(s.targetMetrics),
+            JSON.stringify(compactJson(s.targetMetrics)),
             s.avatarUrl || '',
-            s.createdAt,
+            s.trainerId || null,
+            resolvedTrainerName || null,
+            id,
           ]
         );
+        await pool.query(
+          `UPDATE users SET full_name = $1, phone = $2, trainer_id = $3 WHERE student_id = $4`,
+          [s.fullName, s.phone || '', s.trainerId || null, id]
+        );
+      } catch {
+        dbConnected = false;
       }
+    }
+    res.json(updatedStudent);
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrMessage(err) });
+  }
+});
 
-      for (const m of SEED_METRICS) {
-        await client.query(
-          `INSERT INTO health_metrics (id, student_id, date, timestamp, weight, subcutaneous_fat, bone_calcium, body_water, muscle_mass, body_type, bmr, biological_age, visceral_fat, waist, notes)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-           ON CONFLICT (id) DO NOTHING`,
+app.delete('/api/students/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    dbStore.students = dbStore.students.filter((item) => item.id !== id);
+    dbStore.users = dbStore.users.filter((u) => u.studentId !== id);
+    dbStore.metrics = dbStore.metrics.filter((m) => m.studentId !== id);
+    dbStore.advices = dbStore.advices.filter((a) => a.studentId !== id);
+    dbStore.meals = dbStore.meals.filter((m) => m.studentId !== id);
+    dbStore.workouts = dbStore.workouts.filter((w) => w.studentId !== id);
+    dbStore.photos = dbStore.photos.filter((p) => p.studentId !== id);
+    dbStore.notifications = dbStore.notifications.filter((n) => n.studentId !== id);
+    saveDiskStore(dbStore);
+
+    if (dbConnected) {
+      try {
+        await pool.query('DELETE FROM students WHERE id = $1', [id]);
+        await pool.query('DELETE FROM users WHERE student_id = $1', [id]);
+      } catch {
+        dbConnected = false;
+      }
+    }
+    res.json({ success: true, deletedId: id });
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrMessage(err) });
+  }
+});
+
+// Health Metrics API (10 Indicators)
+app.get('/api/metrics', async (req, res) => {
+  try {
+    const { studentId } = req.query;
+    if (dbConnected) {
+      const query = studentId
+        ? 'SELECT * FROM health_metrics WHERE student_id = $1 ORDER BY timestamp ASC'
+        : 'SELECT * FROM health_metrics ORDER BY timestamp ASC';
+      const params = studentId ? [studentId] : [];
+      const result = await pool.query(query, params);
+      const metrics = result.rows.map((r) => ({
+        id: r.id,
+        studentId: r.student_id,
+        date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
+        timestamp: Number(r.timestamp),
+        weight: parseFloat(r.weight),
+        subcutaneousFat: parseFloat(r.subcutaneous_fat),
+        boneCalcium: parseFloat(r.bone_calcium),
+        bodyWater: parseFloat(r.body_water),
+        muscleMass: parseFloat(r.muscle_mass),
+        bodyType: r.body_type,
+        bmr: parseInt(r.bmr, 10),
+        biologicalAge: parseInt(r.biological_age, 10),
+        visceralFat: parseInt(r.visceral_fat, 10),
+        waist: parseFloat(r.waist),
+        notes: r.notes || '',
+      }));
+      if (!studentId) {
+        dbStore.metrics = metrics;
+        saveDiskStore(dbStore);
+      }
+      return res.json(metrics);
+    }
+    const list = studentId
+      ? dbStore.metrics.filter((m) => m.studentId === studentId)
+      : dbStore.metrics;
+    res.json(list);
+  } catch {
+    dbConnected = false;
+    const { studentId } = req.query;
+    const list = studentId
+      ? dbStore.metrics.filter((m) => m.studentId === studentId)
+      : dbStore.metrics;
+    res.json(list);
+  }
+});
+
+app.post('/api/metrics', async (req, res) => {
+  try {
+    const m = req.body;
+    const cleanMetric = {
+      ...m,
+      notes: String(m.notes || '').trim(),
+    };
+    dbStore.metrics = [...dbStore.metrics.filter((item) => item.id !== m.id), cleanMetric].sort(
+      (a, b) => a.timestamp - b.timestamp
+    );
+    saveDiskStore(dbStore);
+
+    if (dbConnected) {
+      try {
+        await pool.query(
+          `INSERT INTO health_metrics
+           (id, student_id, date, timestamp, weight, subcutaneous_fat, bone_calcium, body_water, muscle_mass, body_type, bmr, biological_age, visceral_fat, waist, notes)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
           [
             m.id,
             m.studentId,
@@ -273,16 +1038,96 @@ async function initDatabase() {
             m.biologicalAge,
             m.visceralFat,
             m.waist,
-            m.notes || '',
+            cleanMetric.notes,
           ]
         );
+      } catch {
+        dbConnected = false;
       }
+    }
+    res.status(201).json(cleanMetric);
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrMessage(err) });
+  }
+});
 
-      for (const a of SEED_ADVICES) {
-        await client.query(
+app.delete('/api/metrics/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    dbStore.metrics = dbStore.metrics.filter((m) => m.id !== id);
+    dbStore.advices = dbStore.advices.filter((a) => a.metricRecordId !== id);
+    saveDiskStore(dbStore);
+
+    if (dbConnected) {
+      try {
+        await pool.query('DELETE FROM health_metrics WHERE id = $1', [id]);
+        await pool.query('DELETE FROM ai_advices WHERE metric_record_id = $1', [id]);
+      } catch {
+        dbConnected = false;
+      }
+    }
+    res.json({ success: true, deletedId: id });
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrMessage(err) });
+  }
+});
+
+// AI Advices API
+app.get('/api/advices', async (req, res) => {
+  try {
+    const { studentId } = req.query;
+    if (dbConnected) {
+      const query = studentId
+        ? 'SELECT * FROM ai_advices WHERE student_id = $1 ORDER BY date DESC'
+        : 'SELECT * FROM ai_advices ORDER BY date DESC';
+      const params = studentId ? [studentId] : [];
+      const result = await pool.query(query, params);
+      const advices = result.rows.map((r) => ({
+        id: r.id,
+        studentId: r.student_id,
+        metricRecordId: r.metric_record_id,
+        date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
+        status: r.status,
+        aiDraftContent: r.ai_draft_content,
+        trainerEditedContent: r.trainer_edited_content,
+        trainerNote: r.trainer_note,
+        approvedAt: r.approved_at,
+      }));
+      if (!studentId) {
+        dbStore.advices = advices;
+        saveDiskStore(dbStore);
+      }
+      return res.json(advices);
+    }
+    const list = studentId
+      ? dbStore.advices.filter((a) => a.studentId === studentId)
+      : dbStore.advices;
+    res.json(list);
+  } catch {
+    dbConnected = false;
+    const { studentId } = req.query;
+    const list = studentId
+      ? dbStore.advices.filter((a) => a.studentId === studentId)
+      : dbStore.advices;
+    res.json(list);
+  }
+});
+
+app.post('/api/advices', async (req, res) => {
+  try {
+    const a = req.body;
+    dbStore.advices = [a, ...dbStore.advices.filter((item) => item.id !== a.id)];
+    saveDiskStore(dbStore);
+
+    if (dbConnected) {
+      try {
+        await pool.query(
           `INSERT INTO ai_advices (id, student_id, metric_record_id, date, status, ai_draft_content, trainer_edited_content, trainer_note, approved_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-           ON CONFLICT (id) DO NOTHING`,
+           ON CONFLICT (id) DO UPDATE SET
+             ai_draft_content = EXCLUDED.ai_draft_content,
+             trainer_edited_content = EXCLUDED.trainer_edited_content,
+             approved_at = EXCLUDED.approved_at`,
           [
             a.id,
             a.studentId,
@@ -295,550 +1140,9 @@ async function initDatabase() {
             a.approvedAt || null,
           ]
         );
+      } catch {
+        dbConnected = false;
       }
-
-      for (const ml of SEED_MEALS) {
-        await client.query(
-          `INSERT INTO meal_logs (id, student_id, date, meal_type, image_url, food_description, estimated_calories, macros, trainer_reaction, trainer_comment, logged_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-           ON CONFLICT (id) DO NOTHING`,
-          [
-            ml.id,
-            ml.studentId,
-            ml.date,
-            ml.mealType,
-            ml.imageUrl,
-            ml.foodDescription,
-            ml.estimatedCalories,
-            JSON.stringify(ml.macros),
-            ml.trainerReaction || null,
-            ml.trainerComment || null,
-            ml.loggedAt,
-          ]
-        );
-      }
-
-      for (const w of SEED_WORKOUTS) {
-        await client.query(
-          `INSERT INTO workout_logs (id, student_id, date, plan_title, duration_minutes, exercises, trainer_reaction, trainer_comment, logged_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-           ON CONFLICT (id) DO NOTHING`,
-          [
-            w.id,
-            w.studentId,
-            w.date,
-            w.planTitle,
-            w.durationMinutes,
-            JSON.stringify(w.exercises),
-            w.trainerReaction || null,
-            w.trainerComment || null,
-            w.loggedAt,
-          ]
-        );
-      }
-
-      for (const p of SEED_PHOTOS) {
-        await client.query(
-          `INSERT INTO physique_photos (id, student_id, date, image_url, photo_type, weight, notes)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
-           ON CONFLICT (id) DO NOTHING`,
-          [p.id, p.studentId, p.date, p.imageUrl, p.photoType, p.weight, p.notes || '']
-        );
-      }
-
-      for (const b of SEED_BADGES) {
-        await client.query(
-          `INSERT INTO badges (id, student_id, title, description, icon, unlocked_at, category)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
-           ON CONFLICT (id) DO NOTHING`,
-          [b.id, 'student-1', b.title, b.description, b.icon, b.unlockedAt || '', b.category]
-        );
-      }
-
-      for (const n of SEED_NOTIFICATIONS) {
-        await client.query(
-          `INSERT INTO smart_notifications (id, use_case_id, student_id, title, message, priority, created_at, read)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-           ON CONFLICT (id) DO NOTHING`,
-          [n.id, n.useCaseId, n.studentId, n.title, n.message, n.priority, n.createdAt, n.read]
-        );
-      }
-
-      // Seed Default Trainer & Student Users
-      await client.query(
-        `INSERT INTO users (id, username, password, full_name, role, student_id, avatar_url)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (username) DO NOTHING`,
-        [
-          'user-trainer-1',
-          'trunghbl',
-          '123',
-          'Huấn Luyện Viên Trung HBL',
-          'trainer',
-          null,
-          'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
-        ]
-      );
-
-      const defaultStudentUsers = [
-        { id: 'user-std-1', username: 'hoanglong', pass: '123', name: 'Nguyễn Hoàng Long', stdId: 'student-1' },
-        { id: 'user-std-2', username: 'thuha', pass: '123', name: 'Trần Thị Thu Hà', stdId: 'student-2' },
-        { id: 'user-std-3', username: 'minhduc', pass: '123', name: 'Phạm Minh Đức', stdId: 'student-3' },
-        { id: 'user-std-4', username: 'kimngan', pass: '123', name: 'Lê Kim Ngân', stdId: 'student-4' },
-      ];
-      for (const su of defaultStudentUsers) {
-        await client.query(
-          `INSERT INTO users (id, username, password, full_name, role, student_id)
-           VALUES ($1, $2, $3, $4, $5, $6)
-           ON CONFLICT (username) DO NOTHING`,
-          [su.id, su.username, su.pass, su.name, 'student', su.stdId]
-        );
-      }
-
-      console.log('✅ Seed completed successfully with trunghbl trainer account.');
-    } else {
-      // Ensure trainer trunghbl exists even if table already had students
-      await client.query(
-        `INSERT INTO users (id, username, password, full_name, role, student_id, avatar_url)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (username) DO NOTHING`,
-        [
-          'user-trainer-1',
-          'trunghbl',
-          '123',
-          'Huấn Luyện Viên Trung HBL',
-          'trainer',
-          null,
-          'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
-        ]
-      );
-    }
-
-    client.release();
-  } catch (err) {
-    console.warn('⚠️ PostgreSQL connection failed or timed out. Operating with in-memory / local fallback:', err);
-    dbConnected = false;
-  }
-}
-
-// REST API Endpoints
-// Auth API: Login
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    const { username, password } = req.body;
-    if (!username || !password) {
-      return res.status(400).json({ error: 'Vui lòng nhập tên đăng nhập và mật khẩu!' });
-    }
-
-    const cleanUsername = username.trim().toLowerCase();
-    const cleanPassword = password.trim();
-
-    if (dbConnected) {
-      const result = await pool.query(
-        'SELECT id, username, full_name, role, student_id, avatar_url FROM users WHERE LOWER(username) = $1 AND password = $2',
-        [cleanUsername, cleanPassword]
-      );
-      if (result.rows.length > 0) {
-        const u = result.rows[0];
-        return res.json({
-          success: true,
-          user: {
-            id: u.id,
-            username: u.username,
-            fullName: u.full_name,
-            role: u.role,
-            studentId: u.student_id,
-            avatarUrl: u.avatar_url,
-          },
-        });
-      }
-    }
-
-    // In-memory fallback if DB table not yet populated or offline
-    if (cleanUsername === 'trunghbl' && cleanPassword === '123') {
-      return res.json({
-        success: true,
-        user: {
-          id: 'user-trainer-1',
-          username: 'trunghbl',
-          fullName: 'Huấn Luyện Viên Trung HBL',
-          role: 'trainer',
-          avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
-        },
-      });
-    }
-
-    const mockStudentList = [
-      { key: 'hoanglong', name: 'Nguyễn Hoàng Long', studentId: 'student-1' },
-      { key: 'thuha', name: 'Trần Thị Thu Hà', studentId: 'student-2' },
-      { key: 'minhduc', name: 'Phạm Minh Đức', studentId: 'student-3' },
-      { key: 'kimngan', name: 'Lê Kim Ngân', studentId: 'student-4' },
-    ];
-    const matchedStudent = mockStudentList.find((item) => item.key === cleanUsername);
-
-    if (matchedStudent && cleanPassword === '123') {
-      return res.json({
-        success: true,
-        user: {
-          id: `user-${cleanUsername}`,
-          username: cleanUsername,
-          fullName: matchedStudent.name,
-          role: 'student',
-          studentId: matchedStudent.studentId,
-        },
-      });
-    }
-
-    return res.status(401).json({ error: 'Tên đăng nhập hoặc mật khẩu không chính xác!' });
-  } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
-  }
-});
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    databaseConnected: dbConnected,
-    dbType: 'PostgreSQL (Aiven Cloud)',
-    databaseName: 'TramTap',
-    timestamp: new Date().toISOString(),
-  });
-});
-
-// Students API
-app.get('/api/students', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM students ORDER BY created_at DESC');
-    dbConnected = true;
-    const students = result.rows.map((r) => ({
-      id: r.id,
-      fullName: r.full_name,
-      gender: r.gender,
-      age: r.age,
-      height: parseFloat(r.height),
-      phone: r.phone,
-      address: r.address,
-      dateOfBirth: r.date_of_birth ? new Date(r.date_of_birth).toISOString().split('T')[0] : '',
-      healthGoal: r.health_goal,
-      targetMetrics: r.target_metrics || {},
-      avatarUrl: r.avatar_url,
-      driveFolderUrl: r.drive_folder_url || GOOGLE_DRIVE_PARENT_FOLDER_URL,
-      createdAt: r.created_at,
-    }));
-    inMemoryStudents = students;
-    res.json(students);
-  } catch (err: unknown) {
-    console.warn('GET /api/students fallback to inMemoryStudents:', getErrMessage(err));
-    res.json(inMemoryStudents);
-  }
-});
-
-app.post('/api/students', async (req, res) => {
-  try {
-    const s = req.body;
-    const studentId = s.id || `student-${Date.now()}`;
-    const initialUsername = (s.initialUsername || s.phone || studentId).trim();
-    const initialPassword = (s.initialPassword || '123').trim();
-    const safeDob = s.dateOfBirth && String(s.dateOfBirth).trim() ? s.dateOfBirth : '2000-01-01';
-    const safeGoal = s.healthGoal && String(s.healthGoal).trim() ? s.healthGoal : 'Cân đối vóc dáng & Cải thiện sức khỏe';
-
-    const newStudentRecord = {
-      id: studentId,
-      fullName: s.fullName,
-      gender: s.gender || 'Nam',
-      age: Number(s.age) || 25,
-      height: Number(s.height) || 1.7,
-      phone: s.phone || '',
-      address: s.address || '',
-      dateOfBirth: safeDob,
-      healthGoal: safeGoal,
-      targetMetrics: s.targetMetrics || {},
-      avatarUrl: s.avatarUrl || '',
-      driveFolderUrl: s.driveFolderUrl || GOOGLE_DRIVE_PARENT_FOLDER_URL,
-      createdAt: s.createdAt || new Date().toISOString().split('T')[0],
-    };
-
-    // Always update in-memory store immediately
-    inMemoryStudents = [
-      newStudentRecord,
-      ...inMemoryStudents.filter((item) => item.id !== studentId),
-    ];
-
-    try {
-      await pool.query(
-        `INSERT INTO students (id, full_name, gender, age, height, phone, address, date_of_birth, health_goal, target_metrics, avatar_url, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-         ON CONFLICT (id) DO UPDATE SET
-           full_name = EXCLUDED.full_name,
-           gender = EXCLUDED.gender,
-           age = EXCLUDED.age,
-           height = EXCLUDED.height,
-           phone = EXCLUDED.phone,
-           address = EXCLUDED.address,
-           date_of_birth = EXCLUDED.date_of_birth,
-           health_goal = EXCLUDED.health_goal,
-           target_metrics = EXCLUDED.target_metrics,
-           avatar_url = EXCLUDED.avatar_url`,
-        [
-          newStudentRecord.id,
-          newStudentRecord.fullName,
-          newStudentRecord.gender,
-          newStudentRecord.age,
-          newStudentRecord.height,
-          newStudentRecordRecordPhone(newStudentRecord.phone),
-          newStudentRecord.address,
-          newStudentRecord.dateOfBirth,
-          newStudentRecord.healthGoal,
-          JSON.stringify(newStudentRecord.targetMetrics),
-          newStudentRecord.avatarUrl,
-          new Date().toISOString(),
-        ]
-      );
-
-      // Auto-create user login account for the new student
-      await pool.query(
-        `INSERT INTO users (id, username, password, full_name, role, student_id, avatar_url)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (username) DO UPDATE SET
-           password = EXCLUDED.password,
-           full_name = EXCLUDED.full_name,
-           student_id = EXCLUDED.student_id`,
-        [
-          `user-${newStudentRecord.id}`,
-          initialUsername,
-          initialPassword,
-          newStudentRecord.fullName,
-          'student',
-          newStudentRecord.id,
-          newStudentRecord.avatarUrl,
-        ]
-      );
-      dbConnected = true;
-    } catch (dbErr) {
-      console.warn('POST /api/students DB write warning (kept in memory):', getErrMessage(dbErr));
-    }
-
-    res.status(201).json({ ...newStudentRecord, initialUsername, initialPassword });
-  } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
-  }
-});
-
-function newStudentRecordRecordPhone(phone: string): string {
-  return String(phone || '').trim().slice(0, 20);
-}
-
-app.put('/api/students/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const s = req.body;
-    inMemoryStudents = inMemoryStudents.map((item) => (item.id === id ? { ...item, ...s } : item));
-    try {
-      await pool.query(
-        `UPDATE students SET
-          full_name = $1, gender = $2, age = $3, height = $4, phone = $5,
-          address = $6, date_of_birth = $7, health_goal = $8, target_metrics = $9, avatar_url = $10,
-          drive_folder_url = COALESCE($11, drive_folder_url)
-         WHERE id = $12`,
-        [
-          s.fullName,
-          s.gender,
-          s.age,
-          s.height,
-          s.phone,
-          s.address,
-          s.dateOfBirth || '2000-01-01',
-          s.healthGoal,
-          JSON.stringify(s.targetMetrics || {}),
-          s.avatarUrl,
-          s.driveFolderUrl || null,
-          id,
-        ]
-      );
-    } catch (dbErr) {
-      console.warn('PUT /api/students DB warning:', getErrMessage(dbErr));
-    }
-    res.json(s);
-  } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
-  }
-});
-
-app.put('/api/students/:id/drive-folder', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { driveFolderUrl } = req.body;
-    inMemoryStudents = inMemoryStudents.map((item) =>
-      item.id === id ? { ...item, driveFolderUrl } : item
-    );
-    if (driveFolderUrl) {
-      try {
-        await pool.query(
-          'UPDATE students SET drive_folder_url = $1 WHERE id = $2',
-          [driveFolderUrl, id]
-        );
-        await pool.query(
-          'UPDATE meal_logs SET drive_folder_url = $1 WHERE student_id = $2',
-          [driveFolderUrl, id]
-        );
-      } catch (dbErr) {
-        console.warn('PUT drive-folder DB warning:', getErrMessage(dbErr));
-      }
-    }
-    res.json({ success: true, id, driveFolderUrl });
-  } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
-  }
-});
-
-app.delete('/api/students/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    inMemoryStudents = inMemoryStudents.filter((item) => item.id !== id);
-    try {
-      await pool.query('DELETE FROM students WHERE id = $1', [id]);
-    } catch (dbErr) {
-      console.warn('DELETE /api/students DB warning:', getErrMessage(dbErr));
-    }
-    res.json({ success: true, deletedId: id });
-  } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
-  }
-});
-
-// Health Metrics API (10 Indicators)
-app.get('/api/metrics', async (req, res) => {
-  try {
-    const { studentId } = req.query;
-    if (!dbConnected) {
-      const data = studentId
-        ? SEED_METRICS.filter((m) => m.studentId === studentId)
-        : SEED_METRICS;
-      return res.json(data);
-    }
-    const query = studentId
-      ? 'SELECT * FROM health_metrics WHERE student_id = $1 ORDER BY timestamp ASC'
-      : 'SELECT * FROM health_metrics ORDER BY timestamp ASC';
-    const params = studentId ? [studentId] : [];
-    const result = await pool.query(query, params);
-    const metrics = result.rows.map((r) => ({
-      id: r.id,
-      studentId: r.student_id,
-      date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
-      timestamp: Number(r.timestamp),
-      weight: parseFloat(r.weight),
-      subcutaneousFat: parseFloat(r.subcutaneous_fat),
-      boneCalcium: parseFloat(r.bone_calcium),
-      bodyWater: parseFloat(r.body_water),
-      muscleMass: parseFloat(r.muscle_mass),
-      bodyType: r.body_type,
-      bmr: parseInt(r.bmr, 10),
-      biologicalAge: parseInt(r.biological_age, 10),
-      visceralFat: parseInt(r.visceral_fat, 10),
-      waist: parseFloat(r.waist),
-      notes: r.notes,
-    }));
-    res.json(metrics);
-  } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
-  }
-});
-
-app.post('/api/metrics', async (req, res) => {
-  try {
-    const m = req.body;
-    if (dbConnected) {
-      await pool.query(
-        `INSERT INTO health_metrics
-         (id, student_id, date, timestamp, weight, subcutaneous_fat, bone_calcium, body_water, muscle_mass, body_type, bmr, biological_age, visceral_fat, waist, notes)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-        [
-          m.id,
-          m.studentId,
-          m.date,
-          m.timestamp,
-          m.weight,
-          m.subcutaneousFat,
-          m.boneCalcium,
-          m.bodyWater,
-          m.muscleMass,
-          m.bodyType,
-          m.bmr,
-          m.biologicalAge,
-          m.visceralFat,
-          m.waist,
-          m.notes || '',
-        ]
-      );
-    }
-    res.status(201).json(m);
-  } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
-  }
-});
-
-app.delete('/api/metrics/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    if (dbConnected) {
-      await pool.query('DELETE FROM health_metrics WHERE id = $1', [id]);
-    }
-    res.json({ success: true, deletedId: id });
-  } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
-  }
-});
-
-// AI Advices API
-app.get('/api/advices', async (req, res) => {
-  try {
-    const { studentId } = req.query;
-    if (!dbConnected) {
-      const data = studentId
-        ? SEED_ADVICES.filter((a) => a.studentId === studentId)
-        : SEED_ADVICES;
-      return res.json(data);
-    }
-    const query = studentId
-      ? 'SELECT * FROM ai_advices WHERE student_id = $1 ORDER BY date DESC'
-      : 'SELECT * FROM ai_advices ORDER BY date DESC';
-    const params = studentId ? [studentId] : [];
-    const result = await pool.query(query, params);
-    const advices = result.rows.map((r) => ({
-      id: r.id,
-      studentId: r.student_id,
-      metricRecordId: r.metric_record_id,
-      date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
-      status: r.status,
-      aiDraftContent: r.ai_draft_content,
-      trainerEditedContent: r.trainer_edited_content,
-      trainerNote: r.trainer_note,
-      approvedAt: r.approved_at,
-    }));
-    res.json(advices);
-  } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
-  }
-});
-
-app.post('/api/advices', async (req, res) => {
-  try {
-    const a = req.body;
-    if (dbConnected) {
-      await pool.query(
-        `INSERT INTO ai_advices (id, student_id, metric_record_id, date, status, ai_draft_content, trainer_edited_content, trainer_note, approved_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [
-          a.id,
-          a.studentId,
-          a.metricRecordId,
-          a.date,
-          a.status,
-          JSON.stringify(a.aiDraftContent),
-          a.trainerEditedContent || null,
-          a.trainerNote || null,
-          a.approvedAt || null,
-        ]
-      );
     }
     res.status(201).json(a);
   } catch (err: unknown) {
@@ -850,13 +1154,31 @@ app.put('/api/advices/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const a = req.body;
+    dbStore.advices = dbStore.advices.map((item) => (item.id === id ? { ...item, ...a } : item));
+    saveDiskStore(dbStore);
+
     if (dbConnected) {
-      await pool.query(
-        `UPDATE ai_advices SET
-          status = $1, trainer_edited_content = $2, trainer_note = $3, approved_at = $4
-         WHERE id = $5`,
-        [a.status, a.trainerEditedContent, a.trainerNote, a.approvedAt, id]
-      );
+      try {
+        await pool.query(
+          `UPDATE ai_advices SET
+            status = COALESCE($1, status),
+            ai_draft_content = COALESCE($2, ai_draft_content),
+            trainer_edited_content = $3,
+            trainer_note = $4,
+            approved_at = $5
+           WHERE id = $6`,
+          [
+            a.status,
+            a.aiDraftContent ? JSON.stringify(a.aiDraftContent) : null,
+            a.trainerEditedContent,
+            a.trainerNote,
+            a.approvedAt,
+            id,
+          ]
+        );
+      } catch {
+        dbConnected = false;
+      }
     }
     res.json(a);
   } catch (err: unknown) {
@@ -864,305 +1186,309 @@ app.put('/api/advices/:id', async (req, res) => {
   }
 });
 
-// Google Drive Parent Folder configured for FitTrack Pro
-const GOOGLE_DRIVE_PARENT_FOLDER_URL = 'https://drive.google.com/drive/folders/1DJCFlItKnPr4-YGShTwmJEgiFQ8Yayqc?usp=sharing';
-const GOOGLE_DRIVE_FOLDER_ID = '1DJCFlItKnPr4-YGShTwmJEgiFQ8Yayqc';
-
-// AI Meal Photo Recognition Endpoint (SRS Nutrition Log auto-analysis)
-app.post('/api/ai/analyze-meal', async (req, res) => {
+// AI Health Analysis Endpoint
+app.post('/api/ai/analyze-health', async (req, res) => {
   try {
-    const {
-      imageBase64,
-      mimeType = 'image/jpeg',
-      studentGoal = 'Cân đối vóc dáng',
-      mealType = 'Bữa trưa',
-      studentName = 'Học viên',
-    } = req.body;
-
-    if (!imageBase64) {
-      return res.status(400).json({ error: 'Vui lòng cung cấp dữ liệu ảnh bữa ăn (Base64).' });
+    const { student, metric, previousMetric } = req.body;
+    if (!student || !metric) {
+      return res.status(400).json({ error: 'Thiếu dữ liệu học viên hoặc chỉ số đo lường.' });
     }
 
-    const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '').trim();
-    const effectiveMime = mimeType.includes('png')
-      ? 'image/png'
-      : mimeType.includes('webp')
-      ? 'image/webp'
-      : 'image/jpeg';
+    const calorieAnalysis = calculateCalorieGoalBreakdown(
+      metric.bmr,
+      metric.weight,
+      student,
+      1.375,
+      metric.visceralFat
+    );
 
-    let aiResult: any = null;
-    let geminiErrorHint = '';
-
-    // Check if Gemini API Key is available in runtime env
     const apiKey = process.env.GEMINI_API_KEY;
     if (apiKey && apiKey !== 'MY_GEMINI_API_KEY') {
       const client = new GoogleGenAI({
         apiKey,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
-        },
+        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
       });
 
-      const prompt = `Bạn là chuyên gia dinh dưỡng thể thao & AI thị giác máy tính tại FitTrack Pro.
-Nhiệm vụ: Quan sát kỹ bức ảnh học viên gửi lên và phân tích trực tiếp từ hình ảnh.
-Thông tin học viên: Tên ${studentName}, Mục tiêu sức khỏe: "${studentGoal}", Thời điểm: ${mealType}.
+      const userPrompt = `
+HỌC VIÊN: ${student.fullName} (${student.gender}, ${student.age} tuổi, ${student.height}m).
+Mục tiêu sức khỏe: "${student.healthGoal}".
+CƠ SỞ TÍNH CALO (4 YẾU TỐ):
+- Cân nặng hiện tại: ${calorieAnalysis.currentWeightKg} kg
+- Cân nặng mong muốn: ${calorieAnalysis.targetWeightKg} kg (${calorieAnalysis.mode === 'weight_loss' ? `Giảm ${calorieAnalysis.weightDiffKg} kg` : calorieAnalysis.mode === 'weight_gain' ? `Tăng +${calorieAnalysis.weightDiffKg} kg` : 'Duy trì cân nặng'})
+- Thời gian mong muốn đạt mục tiêu: ${calorieAnalysis.durationWeeks} tuần (${calorieAnalysis.durationDays} ngày)
+- Mức mỡ nội tạng hiện tại: Cấp ${metric.visceralFat}${calorieAnalysis.targetVisceralFat ? ` (Mục tiêu: Cấp ${calorieAnalysis.targetVisceralFat})` : ''}
+- BMR nghỉ ngơi: ${calorieAnalysis.bmr} Kcal/ngày • TDEE tiêu hao: ${calorieAnalysis.tdee} Kcal/ngày
+- Chênh lệch năng lượng mỗi ngày (bao gồm điều chỉnh mỡ nội tạng): ${calorieAnalysis.dailyCalorieAdjustment > 0 ? `+${calorieAnalysis.dailyCalorieAdjustment}` : calorieAnalysis.dailyCalorieAdjustment} Kcal/ngày
+- ${calorieAnalysis.label}: ${calorieAnalysis.targetDailyCalories} Kcal/ngày (Đạm: ${calorieAnalysis.recommendedMacros.proteinGrams}g, Tinh bột: ${calorieAnalysis.recommendedMacros.carbsGrams}g, Chất béo: ${calorieAnalysis.recommendedMacros.fatGrams}g).
 
-QUY TẮC BẮT BUỘC:
-1. Kiểm tra xem bức ảnh có thực sự là thức ăn, món ăn hoặc đồ uống hay không (isFood: true/false).
-   - Nếu bức ảnh là bảng số liệu, biểu đồ, giấy tờ văn bản, ảnh chụp màn hình, đồ vật, con người hoặc phong cảnh KHÔNG có thức ăn: BẮT BUỘC trả về isFood = false, nonFoodReason = mô tả rõ bức ảnh là gì (ví dụ: "Hình ảnh bạn tải lên là bảng số liệu / tài liệu chữ, không phải thức ăn hay đồ uống."), estimatedCalories = 0, items = [].
-2. Nếu bức ảnh LÀ món ăn/đồ uống thực tế (isFood = true):
-   - Liệt kê chi tiết TỪNG MÓN / THÀNH PHẦN thực phẩm nhìn thấy trong ảnh vào mảng "items":
-     + name: Tên món hoặc thành phần thực phẩm (ví dụ: "Thịt bò tái", "Bánh phở", "Trứng gà ốp la", "Cơm trắng", "Rau cải luộc").
-     + portion: Khẩu phần ước tính từ hình ảnh (ví dụ: "120g", "1 tô vừa", "1 quả", "100g").
-     + calories: Lượng Calo (Kcal) của riêng món đó.
-     + protein: Lượng Đạm/Protein (gram) của riêng món đó.
-     + carbs: Lượng Tinh bột/Carbs (gram) của riêng món đó.
-     + fat: Lượng Chất béo/Fat (gram) của riêng món đó.
-   - Tính tổng lượng Calo của cả bữa ăn (estimatedCalories = tổng calories của các items).
-   - Tính tổng macros của cả bữa ăn: protein (g), carbs (g), fat (g).
-   - Tóm tắt tên bữa ăn (foodDescription) và đưa ra gợi ý cải thiện bữa ăn (advice) sát với mục tiêu "${studentGoal}".`;
+LẦN ĐO HIỆN TẠI (${metric.date}):
+- Cân nặng: ${metric.weight}kg, Mỡ dưới da: ${metric.subcutaneousFat}%, Canxi xương: ${metric.boneCalcium}, Lượng nước: ${metric.bodyWater}%, Cơ bắp: ${metric.muscleMass}kg, Thể hình: "${metric.bodyType}", BMR: ${metric.bmr} Kcal, Tuổi sinh học: ${metric.biologicalAge} tuổi, Mỡ nội tạng: Cấp ${metric.visceralFat}, Vòng eo: ${metric.waist}cm.
+${previousMetric ? `LẦN ĐO TRƯỚC (${previousMetric.date}): Cân nặng: ${previousMetric.weight}kg, Cơ bắp: ${previousMetric.muscleMass}kg, Mỡ dưới da: ${previousMetric.subcutaneousFat}%, Mỡ nội tạng: Cấp ${previousMetric.visceralFat}, Tuổi sinh học: ${previousMetric.biologicalAge} tuổi.` : 'Lần đo đầu tiên.'}
 
-      const candidateModels = [
-        'gemini-3.8-flash',
-        'gemini-flash-latest',
-        'gemini-3.1-flash-lite',
-      ];
+YÊU CẦU: Trả về JSON theo đúng 3 phần bắt buộc:
+1. warningMetrics: Danh sách các chỉ số bất thường kèm rủi ro bệnh lý cụ thể.
+2. deepAssessment: Đánh giá chuyên sâu 4 khía cạnh (overview, bodyCompositionAnalysis, visceralAndAgingRisk, progressComparison).
+3. actionRecommendations: Khuyến nghị hành động định lượng cụ thể về Dinh dưỡng (phải phân tích rõ mức Calo tối đa nạp mỗi ngày nếu giảm cân hoặc tối thiểu nạp mỗi ngày nếu tăng cân dựa trên cân nặng hiện tại ${calorieAnalysis.currentWeightKg}kg, cân nặng mục tiêu ${calorieAnalysis.targetWeightKg}kg, thời gian ${calorieAnalysis.durationWeeks} tuần và mức mỡ nội tạng cấp ${metric.visceralFat}), Tập luyện, Lối sống & Chuyển hóa.`;
 
-      for (const modelName of candidateModels) {
-        try {
-          const geminiCall = client.models.generateContent({
-            model: modelName,
-            contents: {
-              parts: [
-                {
-                  inlineData: {
-                    mimeType: effectiveMime,
-                    data: cleanBase64,
-                  },
-                },
-                {
-                  text: prompt,
-                },
-              ],
-            },
-            config: {
-              responseMimeType: 'application/json',
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  isFood: {
-                    type: Type.BOOLEAN,
-                    description: 'True nếu ảnh là thức ăn/đồ uống thực tế. False nếu ảnh là bảng số liệu, tài liệu chữ, ảnh chụp màn hình hoặc không phải đồ ăn.',
-                  },
-                  nonFoodReason: {
-                    type: Type.STRING,
-                    description: 'Lý do từ chối nếu isFood = false (mô tả ảnh thực tế là gì).',
-                  },
-                  foodDescription: {
-                    type: Type.STRING,
-                    description: 'Tên bữa ăn và các thành phần nhận diện được từ bức ảnh.',
-                  },
-                  estimatedCalories: {
-                    type: Type.INTEGER,
-                    description: 'Tổng lượng Calo (Kcal) của toàn bộ bữa ăn.',
-                  },
-                  macros: {
+      try {
+        const response = await client.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: userPrompt,
+          config: {
+            systemInstruction: `Bạn là Chuyên gia Cao cấp về Y học Thể thao & Dinh dưỡng Chuyển hóa tại FitTrack Pro.
+QUY TẮC BẮT BUỘC: Tuyệt đối không mô tả chung chung. Bắt buộc phân tích sâu theo cấu trúc 3 phần:
+Phần 1: Chỉ số cảnh báo (warningMetrics) - Tên chỉ số, giá trị thực tế, ngưỡng chuẩn, mức độ (danger/warning/safe) và nguy cơ bệnh lý tim mạch/chuyển hóa/xương khớp cụ thể.
+Phần 2: Đánh giá chuyên sâu (deepAssessment) - Tổng quan thể trạng (overview), ma trận cơ-mỡ-nước-xương (bodyCompositionAnalysis), mỡ nội tạng & lão hóa sinh học (visceralAndAgingRisk), so sánh tiến trình định lượng (progressComparison).
+Phần 3: Khuyến nghị hành động cụ thể (actionRecommendations) - Chia rõ 3 nhóm:
+- Nhóm 'Dinh dưỡng': Bắt buộc phân tích dựa trên cân nặng hiện tại, cân nặng mong muốn, thời gian mong muốn (số tuần/ngày) và mức mỡ nội tạng để chỉ rõ MỨC CALO TỐI ĐA nạp mỗi ngày (đối với người giảm cân / hạ mỡ nội tạng) hoặc MỨC CALO TỐI THIỂU nạp mỗi ngày (đối với người tăng cân), kèm số gram Protein, Tinh bột, Chất béo.
+- Nhóm 'Tập luyện': Số buổi & dạng bài tập cụ thể.
+- Nhóm 'Lối sống & Chuyển hóa': Lít nước & giấc ngủ.`,
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                warningMetrics: {
+                  type: Type.ARRAY,
+                  items: {
                     type: Type.OBJECT,
                     properties: {
-                      protein: { type: Type.INTEGER },
-                      carbs: { type: Type.INTEGER },
-                      fat: { type: Type.INTEGER },
+                      name: { type: Type.STRING },
+                      value: { type: Type.STRING },
+                      standard: { type: Type.STRING },
+                      level: { type: Type.STRING, enum: ['danger', 'warning', 'safe'] },
+                      risk: { type: Type.STRING },
                     },
-                    required: ['protein', 'carbs', 'fat'],
-                  },
-                  items: {
-                    type: Type.ARRAY,
-                    description: 'Danh sách chi tiết từng món/thành phần trong bữa ăn kèm Calo, Protein, Carbs, Fat của từng món.',
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        name: { type: Type.STRING },
-                        portion: { type: Type.STRING },
-                        calories: { type: Type.INTEGER },
-                        protein: { type: Type.NUMBER },
-                        carbs: { type: Type.NUMBER },
-                        fat: { type: Type.NUMBER },
-                      },
-                      required: ['name', 'portion', 'calories', 'protein', 'carbs', 'fat'],
-                    },
-                  },
-                  nutritionScore: {
-                    type: Type.NUMBER,
-                    description: 'Điểm đánh giá độ lành mạnh của bữa ăn trên thang 10.',
-                  },
-                  advice: {
-                    type: Type.STRING,
-                    description: 'Gợi ý cải thiện bữa ăn hoặc lưu ý dinh dưỡng cụ thể cho học viên.',
-                  },
-                  healthTags: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
+                    required: ['name', 'value', 'standard', 'level', 'risk'],
                   },
                 },
-                required: [
-                  'isFood',
-                  'foodDescription',
-                  'estimatedCalories',
-                  'macros',
-                  'items',
-                  'nutritionScore',
-                  'advice',
-                ],
+                deepAssessment: {
+                  type: Type.OBJECT,
+                  properties: {
+                    overview: { type: Type.STRING },
+                    bodyCompositionAnalysis: { type: Type.STRING },
+                    visceralAndAgingRisk: { type: Type.STRING },
+                    progressComparison: { type: Type.STRING },
+                  },
+                  required: [
+                    'overview',
+                    'bodyCompositionAnalysis',
+                    'visceralAndAgingRisk',
+                    'progressComparison',
+                  ],
+                },
+                actionRecommendations: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      area: {
+                        type: Type.STRING,
+                        enum: ['Dinh dưỡng', 'Tập luyện', 'Lối sống & Chuyển hóa'],
+                      },
+                      action: { type: Type.STRING },
+                      target: { type: Type.STRING },
+                      notes: { type: Type.STRING },
+                    },
+                    required: ['area', 'action', 'target'],
+                  },
+                },
+                summary: { type: Type.STRING },
+                nutritionAdvice: { type: Type.STRING },
+                workoutAdvice: { type: Type.STRING },
+                lifestyleTip: { type: Type.STRING },
+                waterTargetLiters: { type: Type.NUMBER },
+                calorieTargetKcal: { type: Type.INTEGER },
               },
+              required: [
+                'warningMetrics',
+                'deepAssessment',
+                'actionRecommendations',
+                'summary',
+                'nutritionAdvice',
+                'workoutAdvice',
+                'lifestyleTip',
+                'waterTargetLiters',
+                'calorieTargetKcal',
+              ],
             },
-          });
+          },
+        });
 
-          const timeoutPromise = new Promise<Awaited<typeof geminiCall>>((_, reject) =>
-            setTimeout(() => reject(new Error('Model timeout')), 25000)
-          );
-
-          const response = await Promise.race([geminiCall, timeoutPromise]);
-
-          const rawText = (response?.text || '').trim();
-          const match = rawText.match(/\{[\s\S]*\}/);
-          if (match) {
-            const parsed = JSON.parse(match[0]);
-            if (parsed && typeof parsed.isFood === 'boolean') {
-              aiResult = {
-                ...parsed,
-                analysisSource: 'gemini-ai',
-                geminiModelUsed: modelName,
-              };
-              break;
-            }
-          }
-        } catch (modelErr: unknown) {
-          const msg = getErrMessage(modelErr);
-          console.warn(`⚠️ Model ${modelName} error (${msg}), trying next model...`);
-          if (msg.includes('401') || msg.includes('403') || msg.includes('API key not valid')) {
-            geminiErrorHint =
-              'GEMINI_API_KEY hiện tại không hợp lệ hoặc đã hết hạn. Vui lòng kiểm tra trong Settings > Secrets.';
-            break;
-          }
+        const rawText = (response.text || '').trim();
+        const parsed = JSON.parse(rawText);
+        if (parsed && Array.isArray(parsed.warningMetrics)) {
+          parsed.calorieAnalysis = calorieAnalysis;
+          parsed.calorieTargetKcal = calorieAnalysis.targetDailyCalories;
+          return res.json({ success: true, analysis: parsed, source: 'gemini-ai' });
         }
+      } catch (geminiErr) {
+        console.warn('Gemini health analysis warning:', getErrMessage(geminiErr));
       }
     }
 
-    const studentFolder = `FitTrack_${studentName.replace(/\s+/g, '_')}`;
-    const driveFolderUrl = GOOGLE_DRIVE_PARENT_FOLDER_URL;
-    const driveFileUrl = `${GOOGLE_DRIVE_PARENT_FOLDER_URL}#file-${Date.now()}`;
-
-    res.status(200).json({
-      success: Boolean(aiResult),
-      geminiErrorHint: geminiErrorHint || undefined,
-      analysis: aiResult
-        ? {
-            ...aiResult,
-            studentFolder,
-            driveFolderUrl,
-            driveFileUrl,
-          }
-        : null,
-    });
+    res.json({ success: false, fallbackRequired: true, calorieAnalysis });
   } catch (err: unknown) {
-    console.error('Error analyzing meal:', err);
-    res.status(400).json({ error: 'Không thể phân tích bữa ăn: ' + getErrMessage(err) });
+    res.status(500).json({ error: getErrMessage(err) });
   }
 });
 
-// Meals API
+// Meals API (Stored directly in Database with compressed WebP/JPEG thumbnails)
 app.get('/api/meals', async (req, res) => {
   try {
     const { studentId } = req.query;
-    if (!dbConnected) {
-      const data = studentId
-        ? SEED_MEALS.filter((m) => m.studentId === studentId)
-        : SEED_MEALS;
-      return res.json(data);
+    if (dbConnected) {
+      const query = studentId
+        ? 'SELECT * FROM meal_logs WHERE student_id = $1 ORDER BY date DESC, logged_at DESC'
+        : 'SELECT * FROM meal_logs ORDER BY date DESC, logged_at DESC';
+      const params = studentId ? [studentId] : [];
+      const result = await pool.query(query, params);
+      const meals = result.rows.map((r) => ({
+        id: r.id,
+        studentId: r.student_id,
+        date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
+        mealType: r.meal_type,
+        imageUrl: r.image_url || '',
+        foodDescription: r.food_description || '',
+        estimatedCalories: r.estimated_calories || 0,
+        macros: r.macros || { protein: 0, carbs: 0, fat: 0 },
+        trainerReaction: r.trainer_reaction,
+        trainerComment: r.trainer_comment,
+        loggedAt: r.logged_at,
+      }));
+      if (!studentId) {
+        dbStore.meals = meals;
+        saveDiskStore(dbStore);
+      }
+      return res.json(meals);
     }
-    const query = studentId
-      ? 'SELECT * FROM meal_logs WHERE student_id = $1 ORDER BY date DESC, logged_at DESC'
-      : 'SELECT * FROM meal_logs ORDER BY date DESC, logged_at DESC';
-    const params = studentId ? [studentId] : [];
-    const result = await pool.query(query, params);
-    const meals = result.rows.map((r) => ({
-      id: r.id,
-      studentId: r.student_id,
-      date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
-      mealType: r.meal_type,
-      imageUrl: r.image_url,
-      foodDescription: r.food_description,
-      estimatedCalories: r.estimated_calories,
-      macros: r.macros || { protein: 0, carbs: 0, fat: 0 },
-      items: Array.isArray(r.items) ? r.items : [],
-      trainerReaction: r.trainer_reaction,
-      trainerComment: r.trainer_comment,
-      loggedAt: r.logged_at,
-      driveFolderUrl: r.drive_folder_url || GOOGLE_DRIVE_PARENT_FOLDER_URL,
-      driveFileUrl: r.drive_file_url,
-      aiAnalyzed: r.ai_analyzed ?? true,
-      nutritionAdvice: r.nutrition_advice || '',
-    }));
-    res.json(meals);
-  } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    const list = studentId
+      ? dbStore.meals.filter((m) => m.studentId === studentId)
+      : dbStore.meals;
+    res.json(list);
+  } catch {
+    dbConnected = false;
+    const { studentId } = req.query;
+    const list = studentId
+      ? dbStore.meals.filter((m) => m.studentId === studentId)
+      : dbStore.meals;
+    res.json(list);
   }
 });
 
 app.post('/api/meals', async (req, res) => {
   try {
     const m = req.body;
-    const mealId = m.id || `meal-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-    const loggedAt = m.loggedAt || new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-    const driveFolderUrl = m.driveFolderUrl || GOOGLE_DRIVE_PARENT_FOLDER_URL;
-    const driveFileUrl = m.driveFileUrl || driveFolderUrl;
-    const aiAnalyzed = m.aiAnalyzed !== undefined ? m.aiAnalyzed : true;
-    const nutritionAdvice = m.nutritionAdvice || '';
-    const mealItems = Array.isArray(m.items) ? m.items : [];
+    const mealId = m.id || `meal-${Date.now()}`;
+    const loggedAt =
+      m.loggedAt || new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+    const compactMacros: Record<string, unknown> = {
+      protein: Number(m.macros?.protein) || 0,
+      carbs: Number(m.macros?.carbs) || 0,
+      fat: Number(m.macros?.fat) || 0,
+    };
+    if (m.macros?.dayNumber !== undefined) compactMacros.dayNumber = Number(m.macros.dayNumber);
+    if (m.macros?.morningStatus) compactMacros.morningStatus = String(m.macros.morningStatus);
+    if (m.macros?.afternoonStatus) compactMacros.afternoonStatus = String(m.macros.afternoonStatus);
+    if (m.macros?.attendanceStatus) compactMacros.attendanceStatus = String(m.macros.attendanceStatus);
 
-    // NEVER store heavy Base64 image data in PostgreSQL database! Only store lightweight Drive/HTTP link
-    const rawImg = typeof m.imageUrl === 'string' ? m.imageUrl : '';
-    const lightweightImageUrl = rawImg.startsWith('data:')
-      ? 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80'
-      : rawImg || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80';
+    const newMeal = {
+      id: mealId,
+      studentId: m.studentId,
+      date: m.date || new Date().toISOString().split('T')[0],
+      mealType: m.mealType || 'Phiếu ăn 30 ngày',
+      imageUrl: m.imageUrl || '',
+      foodDescription: String(m.foodDescription || '').trim(),
+      estimatedCalories: Number(m.estimatedCalories) || 0,
+      macros: compactMacros as {
+        protein: number;
+        carbs: number;
+        fat: number;
+        dayNumber?: number;
+        morningStatus?: string;
+        afternoonStatus?: string;
+        attendanceStatus?: string;
+      },
+      trainerReaction: m.trainerReaction,
+      trainerComment: m.trainerComment,
+      loggedAt,
+    };
+
+    dbStore.meals = [newMeal, ...dbStore.meals.filter((item) => item.id !== mealId)];
+    saveDiskStore(dbStore);
 
     if (dbConnected) {
-      await pool.query(
-        `INSERT INTO meal_logs (id, student_id, date, meal_type, image_url, food_description, estimated_calories, macros, items, trainer_reaction, trainer_comment, logged_at, drive_folder_url, drive_file_url, ai_analyzed, nutrition_advice)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
-        [
-          mealId,
-          m.studentId,
-          m.date || new Date().toISOString().split('T')[0],
-          m.mealType || 'Bữa trưa',
-          lightweightImageUrl,
-          m.foodDescription,
-          m.estimatedCalories || 450,
-          JSON.stringify(m.macros || { protein: 35, carbs: 45, fat: 12 }),
-          JSON.stringify(mealItems),
-          m.trainerReaction || null,
-          m.trainerComment || null,
-          loggedAt,
-          driveFolderUrl,
-          driveFileUrl,
-          aiAnalyzed,
-          nutritionAdvice,
-        ]
-      );
+      try {
+        await pool.query(
+          `INSERT INTO meal_logs (id, student_id, date, meal_type, image_url, food_description, estimated_calories, macros, trainer_reaction, trainer_comment, logged_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           ON CONFLICT (id) DO UPDATE SET
+             date = EXCLUDED.date,
+             meal_type = EXCLUDED.meal_type,
+             image_url = EXCLUDED.image_url,
+             food_description = EXCLUDED.food_description,
+             estimated_calories = EXCLUDED.estimated_calories,
+             macros = EXCLUDED.macros,
+             trainer_reaction = EXCLUDED.trainer_reaction,
+             trainer_comment = EXCLUDED.trainer_comment,
+             logged_at = EXCLUDED.logged_at`,
+          [
+            newMeal.id,
+            newMeal.studentId,
+            newMeal.date,
+            newMeal.mealType,
+            newMeal.imageUrl,
+            newMeal.foodDescription,
+            newMeal.estimatedCalories,
+            JSON.stringify(compactMacros),
+            m.trainerReaction || null,
+            m.trainerComment || null,
+            loggedAt,
+          ]
+        );
+      } catch {
+        dbConnected = false;
+      }
     }
-    res.status(201).json({
-      ...m,
-      id: mealId,
-      imageUrl: lightweightImageUrl,
-      items: mealItems,
-      loggedAt,
-      driveFolderUrl,
-      driveFileUrl,
-      aiAnalyzed,
-      nutritionAdvice,
-    });
+
+    res.status(201).json(newMeal);
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrMessage(err) });
+  }
+});
+
+app.delete('/api/meals/student/:studentId', async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    dbStore.meals = dbStore.meals.filter((m) => m.studentId !== studentId);
+    saveDiskStore(dbStore);
+
+    if (dbConnected) {
+      try {
+        await pool.query('DELETE FROM meal_logs WHERE student_id = $1', [studentId]);
+      } catch {
+        dbConnected = false;
+      }
+    }
+    res.json({ success: true });
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrMessage(err) });
+  }
+});
+
+app.delete('/api/meals/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    dbStore.meals = dbStore.meals.filter((m) => m.id !== id);
+    saveDiskStore(dbStore);
+
+    if (dbConnected) {
+      try {
+        await pool.query('DELETE FROM meal_logs WHERE id = $1', [id]);
+      } catch {
+        dbConnected = false;
+      }
+    }
+    res.json({ success: true });
   } catch (err: unknown) {
     res.status(500).json({ error: getErrMessage(err) });
   }
@@ -1172,11 +1498,20 @@ app.put('/api/meals/:id/feedback', async (req, res) => {
   try {
     const { id } = req.params;
     const { reaction, comment } = req.body;
+    dbStore.meals = dbStore.meals.map((m) =>
+      m.id === id ? { ...m, trainerReaction: reaction, trainerComment: comment } : m
+    );
+    saveDiskStore(dbStore);
+
     if (dbConnected) {
-      await pool.query(
-        `UPDATE meal_logs SET trainer_reaction = $1, trainer_comment = $2 WHERE id = $3`,
-        [reaction, comment, id]
-      );
+      try {
+        await pool.query(
+          `UPDATE meal_logs SET trainer_reaction = $1, trainer_comment = $2 WHERE id = $3`,
+          [reaction, comment, id]
+        );
+      } catch {
+        dbConnected = false;
+      }
     }
     res.json({ success: true, id, reaction, comment });
   } catch (err: unknown) {
@@ -1188,53 +1523,69 @@ app.put('/api/meals/:id/feedback', async (req, res) => {
 app.get('/api/workouts', async (req, res) => {
   try {
     const { studentId } = req.query;
-    if (!dbConnected) {
-      const data = studentId
-        ? SEED_WORKOUTS.filter((w) => w.studentId === studentId)
-        : SEED_WORKOUTS;
-      return res.json(data);
+    if (dbConnected) {
+      const query = studentId
+        ? 'SELECT * FROM workout_logs WHERE student_id = $1 ORDER BY date DESC'
+        : 'SELECT * FROM workout_logs ORDER BY date DESC';
+      const params = studentId ? [studentId] : [];
+      const result = await pool.query(query, params);
+      const workouts = result.rows.map((r) => ({
+        id: r.id,
+        studentId: r.student_id,
+        date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
+        planTitle: r.plan_title,
+        durationMinutes: r.duration_minutes,
+        exercises: r.exercises || [],
+        trainerReaction: r.trainer_reaction,
+        trainerComment: r.trainer_comment,
+        loggedAt: r.logged_at,
+      }));
+      if (!studentId) {
+        dbStore.workouts = workouts;
+        saveDiskStore(dbStore);
+      }
+      return res.json(workouts);
     }
-    const query = studentId
-      ? 'SELECT * FROM workout_logs WHERE student_id = $1 ORDER BY date DESC'
-      : 'SELECT * FROM workout_logs ORDER BY date DESC';
-    const params = studentId ? [studentId] : [];
-    const result = await pool.query(query, params);
-    const workouts = result.rows.map((r) => ({
-      id: r.id,
-      studentId: r.student_id,
-      date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
-      planTitle: r.plan_title,
-      durationMinutes: r.duration_minutes,
-      exercises: r.exercises || [],
-      trainerReaction: r.trainer_reaction,
-      trainerComment: r.trainer_comment,
-      loggedAt: r.logged_at,
-    }));
-    res.json(workouts);
-  } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    const list = studentId
+      ? dbStore.workouts.filter((w) => w.studentId === studentId)
+      : dbStore.workouts;
+    res.json(list);
+  } catch {
+    dbConnected = false;
+    const { studentId } = req.query;
+    const list = studentId
+      ? dbStore.workouts.filter((w) => w.studentId === studentId)
+      : dbStore.workouts;
+    res.json(list);
   }
 });
 
 app.post('/api/workouts', async (req, res) => {
   try {
     const w = req.body;
+    dbStore.workouts = [w, ...dbStore.workouts.filter((item) => item.id !== w.id)];
+    saveDiskStore(dbStore);
+
     if (dbConnected) {
-      await pool.query(
-        `INSERT INTO workout_logs (id, student_id, date, plan_title, duration_minutes, exercises, trainer_reaction, trainer_comment, logged_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [
-          w.id,
-          w.studentId,
-          w.date,
-          w.planTitle,
-          w.durationMinutes,
-          JSON.stringify(w.exercises),
-          w.trainerReaction || null,
-          w.trainerComment || null,
-          w.loggedAt,
-        ]
-      );
+      try {
+        await pool.query(
+          `INSERT INTO workout_logs (id, student_id, date, plan_title, duration_minutes, exercises, trainer_reaction, trainer_comment, logged_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [
+            w.id,
+            w.studentId,
+            w.date,
+            w.planTitle,
+            w.durationMinutes,
+            JSON.stringify(w.exercises || []),
+            w.trainerReaction || null,
+            w.trainerComment || null,
+            w.loggedAt,
+          ]
+        );
+      } catch {
+        dbConnected = false;
+      }
     }
     res.status(201).json(w);
   } catch (err: unknown) {
@@ -1246,11 +1597,20 @@ app.put('/api/workouts/:id/feedback', async (req, res) => {
   try {
     const { id } = req.params;
     const { reaction, comment } = req.body;
+    dbStore.workouts = dbStore.workouts.map((w) =>
+      w.id === id ? { ...w, trainerReaction: reaction, trainerComment: comment } : w
+    );
+    saveDiskStore(dbStore);
+
     if (dbConnected) {
-      await pool.query(
-        `UPDATE workout_logs SET trainer_reaction = $1, trainer_comment = $2 WHERE id = $3`,
-        [reaction, comment, id]
-      );
+      try {
+        await pool.query(
+          `UPDATE workout_logs SET trainer_reaction = $1, trainer_comment = $2 WHERE id = $3`,
+          [reaction, comment, id]
+        );
+      } catch {
+        dbConnected = false;
+      }
     }
     res.json({ success: true, id, reaction, comment });
   } catch (err: unknown) {
@@ -1262,41 +1622,57 @@ app.put('/api/workouts/:id/feedback', async (req, res) => {
 app.get('/api/photos', async (req, res) => {
   try {
     const { studentId } = req.query;
-    if (!dbConnected) {
-      const data = studentId
-        ? SEED_PHOTOS.filter((p) => p.studentId === studentId)
-        : SEED_PHOTOS;
-      return res.json(data);
+    if (dbConnected) {
+      const query = studentId
+        ? 'SELECT * FROM physique_photos WHERE student_id = $1 ORDER BY date ASC'
+        : 'SELECT * FROM physique_photos ORDER BY date ASC';
+      const params = studentId ? [studentId] : [];
+      const result = await pool.query(query, params);
+      const photos = result.rows.map((r) => ({
+        id: r.id,
+        studentId: r.student_id,
+        date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
+        imageUrl: r.image_url,
+        photoType: r.photo_type,
+        weight: parseFloat(r.weight),
+        notes: r.notes || '',
+      }));
+      if (!studentId) {
+        dbStore.photos = photos;
+        saveDiskStore(dbStore);
+      }
+      return res.json(photos);
     }
-    const query = studentId
-      ? 'SELECT * FROM physique_photos WHERE student_id = $1 ORDER BY date ASC'
-      : 'SELECT * FROM physique_photos ORDER BY date ASC';
-    const params = studentId ? [studentId] : [];
-    const result = await pool.query(query, params);
-    const photos = result.rows.map((r) => ({
-      id: r.id,
-      studentId: r.student_id,
-      date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
-      imageUrl: r.image_url,
-      photoType: r.photo_type,
-      weight: parseFloat(r.weight),
-      notes: r.notes,
-    }));
-    res.json(photos);
-  } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    const list = studentId
+      ? dbStore.photos.filter((p) => p.studentId === studentId)
+      : dbStore.photos;
+    res.json(list);
+  } catch {
+    dbConnected = false;
+    const { studentId } = req.query;
+    const list = studentId
+      ? dbStore.photos.filter((p) => p.studentId === studentId)
+      : dbStore.photos;
+    res.json(list);
   }
 });
 
 app.post('/api/photos', async (req, res) => {
   try {
     const p = req.body;
+    dbStore.photos = [...dbStore.photos, p];
+    saveDiskStore(dbStore);
+
     if (dbConnected) {
-      await pool.query(
-        `INSERT INTO physique_photos (id, student_id, date, image_url, photo_type, weight, notes)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [p.id, p.studentId, p.date, p.imageUrl, p.photoType, p.weight, p.notes || '']
-      );
+      try {
+        await pool.query(
+          `INSERT INTO physique_photos (id, student_id, date, image_url, photo_type, weight, notes)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [p.id, p.studentId, p.date, p.imageUrl, p.photoType, p.weight, String(p.notes || '').trim()]
+        );
+      } catch {
+        dbConnected = false;
+      }
     }
     res.status(201).json(p);
   } catch (err: unknown) {
@@ -1307,31 +1683,43 @@ app.post('/api/photos', async (req, res) => {
 // Notifications API
 app.get('/api/notifications', async (req, res) => {
   try {
-    if (!dbConnected) {
-      return res.json(SEED_NOTIFICATIONS);
+    if (dbConnected) {
+      const result = await pool.query('SELECT * FROM smart_notifications ORDER BY created_at DESC');
+      const notifications = result.rows.map((r) => ({
+        id: r.id,
+        useCaseId: r.use_case_id,
+        studentId: r.student_id,
+        title: r.title,
+        message: r.message,
+        priority: r.priority,
+        createdAt: r.created_at,
+        read: r.read,
+      }));
+      dbStore.notifications = notifications;
+      saveDiskStore(dbStore);
+      return res.json(notifications);
     }
-    const result = await pool.query('SELECT * FROM smart_notifications ORDER BY created_at DESC');
-    const notifications = result.rows.map((r) => ({
-      id: r.id,
-      useCaseId: r.use_case_id,
-      studentId: r.student_id,
-      title: r.title,
-      message: r.message,
-      priority: r.priority,
-      createdAt: r.created_at,
-      read: r.read,
-    }));
-    res.json(notifications);
-  } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    res.json(dbStore.notifications);
+  } catch {
+    dbConnected = false;
+    res.json(dbStore.notifications);
   }
 });
 
 app.put('/api/notifications/:id/read', async (req, res) => {
   try {
     const { id } = req.params;
+    dbStore.notifications = dbStore.notifications.map((n) =>
+      n.id === id ? { ...n, read: true } : n
+    );
+    saveDiskStore(dbStore);
+
     if (dbConnected) {
-      await pool.query('UPDATE smart_notifications SET read = true WHERE id = $1', [id]);
+      try {
+        await pool.query('UPDATE smart_notifications SET read = true WHERE id = $1', [id]);
+      } catch {
+        dbConnected = false;
+      }
     }
     res.json({ success: true, id });
   } catch (err: unknown) {
@@ -1343,7 +1731,6 @@ app.put('/api/notifications/:id/read', async (req, res) => {
 async function startServer() {
   await initDatabase();
 
-  // Resolve the static files directory (supports root execution or dist execution)
   const candidatePaths = [
     path.resolve(__dirname, 'dist'),
     path.resolve(process.cwd(), 'dist'),
@@ -1362,7 +1749,6 @@ async function startServer() {
       console.warn('⚠️ No dist/index.html found for production mode.');
     }
   } else {
-    // In dev mode, mount Vite middleware
     try {
       const { createServer: createViteServer } = await import('vite');
       const vite = await createViteServer({

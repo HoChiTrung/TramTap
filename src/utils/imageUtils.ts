@@ -5,14 +5,14 @@
 
 /**
  * Resizes and compresses an image file on the client using HTML5 Canvas.
- * Ensures the generated Base64 string is lightweight (<250KB),
- * preventing network timeouts, 413 Payload Too Large errors, and mobile browser crashes.
+ * Uses WebP (with JPEG fallback) at compact dimensions (default 480x480, quality 0.6)
+ * so every stored image is ultra-lightweight (~15KB - 25KB) to optimize Database storage.
  */
 export const compressImage = (
   file: File,
-  maxWidth = 1200,
-  maxHeight = 1200,
-  quality = 0.78
+  maxWidth = 480,
+  maxHeight = 480,
+  quality = 0.6
 ): Promise<{ base64: string; mimeType: string }> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -56,14 +56,23 @@ export const compressImage = (
           return;
         }
 
-        // Draw and compress to JPEG
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, width, height);
         ctx.drawImage(img, 0, 0, width, height);
 
-        const compressedBase64 = canvas.toDataURL('image/jpeg', quality);
+        // Prefer WebP for 35-50% smaller database storage size, fallback to JPEG
+        const webpData = canvas.toDataURL('image/webp', quality);
+        if (webpData.startsWith('data:image/webp')) {
+          resolve({
+            base64: webpData,
+            mimeType: 'image/webp',
+          });
+          return;
+        }
+
+        const jpegData = canvas.toDataURL('image/jpeg', quality);
         resolve({
-          base64: compressedBase64,
+          base64: jpegData,
           mimeType: 'image/jpeg',
         });
       };

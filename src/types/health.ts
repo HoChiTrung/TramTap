@@ -17,10 +17,35 @@ export type BodyTypeClassification =
 
 export interface TargetMetrics {
   targetWeight?: number; // kg
+  targetDurationWeeks?: number; // Số tuần mong muốn đạt mục tiêu cân nặng (mặc định 8 tuần)
   targetVisceralFat?: number; // Level 1-30
   targetMuscleMass?: number; // kg
   targetSubcutaneousFat?: number; // %
   targetWaist?: number; // cm
+  totalMealPortions?: number; // Tổng số khẩu phần phiếu ăn (VD: 30 khẩu phần hoặc 60 khẩu phần)
+}
+
+export interface CalorieGoalBreakdown {
+  mode: 'weight_loss' | 'weight_gain' | 'maintenance';
+  label: string;
+  currentWeightKg: number;
+  targetWeightKg: number;
+  weightDiffKg: number;
+  currentVisceralFat?: number;
+  targetVisceralFat?: number;
+  visceralFatAdjustmentKcal?: number;
+  durationWeeks: number;
+  durationDays: number;
+  bmr: number;
+  tdee: number;
+  dailyCalorieAdjustment: number;
+  targetDailyCalories: number;
+  recommendedMacros: {
+    proteinGrams: number;
+    carbsGrams: number;
+    fatGrams: number;
+  };
+  explanation: string;
 }
 
 export interface StudentProfile {
@@ -35,7 +60,8 @@ export interface StudentProfile {
   healthGoal: string; // Max 500 chars (Baseline Target)
   targetMetrics: TargetMetrics;
   avatarUrl?: string;
-  driveFolderUrl?: string;
+  trainerId?: string; // ID của HLV phụ trách học viên này
+  trainerName?: string; // Tên của HLV phụ trách
   createdAt: string;
 }
 
@@ -66,13 +92,68 @@ export interface AnomalyAlert {
   threshold?: number;
 }
 
+export type UserRole = 'admin' | 'trainer' | 'student';
+
 export interface AuthUser {
   id: string;
   username: string;
   fullName: string;
-  role: 'trainer' | 'student';
+  role: UserRole;
+  phone?: string;
   studentId?: string;
+  trainerId?: string;
   avatarUrl?: string;
+}
+
+export interface UserAccount {
+  id: string;
+  username: string;
+  password?: string;
+  fullName: string;
+  role: UserRole;
+  phone?: string;
+  studentId?: string | null;
+  trainerId?: string | null;
+  trainerName?: string;
+  createdAt?: string;
+}
+
+export interface WarningMetricItem {
+  name: string;
+  value: string;
+  standard: string;
+  level: 'danger' | 'warning' | 'safe';
+  risk: string;
+}
+
+export interface ActionRecommendationItem {
+  area: 'Dinh dưỡng' | 'Tập luyện' | 'Lối sống & Chuyển hóa';
+  action: string;
+  target: string;
+  notes?: string;
+}
+
+export interface AIHealthAnalysisContent {
+  // Phần 1: Chỉ số cảnh báo
+  warningMetrics: WarningMetricItem[];
+  // Phần 2: Đánh giá chuyên sâu
+  deepAssessment: {
+    overview: string;
+    bodyCompositionAnalysis: string; // Cơ, mỡ, nước, xương
+    visceralAndAgingRisk: string; // Mỡ nội tạng và tốc độ lão hóa sinh học
+    progressComparison?: string; // So sánh tiến trình giữa các lần đo
+  };
+  // Phần 3: Khuyến nghị hành động cụ thể
+  actionRecommendations: ActionRecommendationItem[];
+  // Phân tích chi tiết Mức Calo tối đa / tối thiểu theo cân nặng hiện tại, cân nặng mục tiêu và thời gian
+  calorieAnalysis?: CalorieGoalBreakdown;
+  // Legacy / Quick Access fields for backward compatibility
+  summary: string;
+  nutritionAdvice: string;
+  workoutAdvice: string;
+  lifestyleTip: string;
+  waterTargetLiters: number;
+  calorieTargetKcal: number;
 }
 
 export interface AIAdviceRecord {
@@ -81,14 +162,7 @@ export interface AIAdviceRecord {
   metricRecordId: string;
   date: string;
   status: 'auto_generated' | 'draft_pending' | 'trainer_approved' | 'rejected';
-  aiDraftContent: {
-    summary: string;
-    nutritionAdvice: string;
-    workoutAdvice: string;
-    lifestyleTip: string;
-    waterTargetLiters: number;
-    calorieTargetKcal: number;
-  };
+  aiDraftContent: AIHealthAnalysisContent;
   trainerEditedContent?: string;
   trainerNote?: string;
   approvedAt?: string;
@@ -115,11 +189,13 @@ export interface MealItem {
   fat: number;
 }
 
+export type PortionStatus = 'none' | 'used' | 'takeaway';
+
 export interface MealLog {
   id: string;
   studentId: string;
   date: string;
-  mealType: 'Bữa sáng' | 'Bữa trưa' | 'Bữa tối' | 'Bữa phụ';
+  mealType: 'Bữa sáng' | 'Bữa trưa' | 'Bữa tối' | 'Bữa phụ' | 'Phiếu ăn 30 ngày';
   imageUrl: string;
   foodDescription: string;
   estimatedCalories: number;
@@ -127,14 +203,15 @@ export interface MealLog {
     protein: number; // grams
     carbs: number; // grams
     fat: number; // grams
+    dayNumber?: number; // 1..30
+    morningStatus?: PortionStatus; // 'none' | 'used' | 'takeaway'
+    afternoonStatus?: PortionStatus; // 'none' | 'used' | 'takeaway'
+    attendanceStatus?: 'ate' | 'takeaway' | 'weighed_no_meal';
   };
   items?: MealItem[];
   trainerReaction?: '🔥' | '💪' | '👏' | '❤️';
   trainerComment?: string;
   loggedAt: string;
-  driveFolderUrl?: string;
-  driveFileUrl?: string;
-  aiAnalyzed?: boolean;
   nutritionAdvice?: string;
 }
 
@@ -187,5 +264,3 @@ export interface SmartNotification {
   createdAt: string;
   read: boolean;
 }
-
-export type UserRole = 'trainer' | 'student';

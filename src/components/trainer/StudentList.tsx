@@ -3,33 +3,21 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { StudentProfile } from '../../types/health';
 import { useHealth } from '../../context/HealthContext';
 import { calculateHealthScore, detectAnomalies } from '../../utils/healthCalculations';
 import { AddStudentModal } from '../modals/AddStudentModal';
 import {
-  initAuth,
-  googleSignIn,
-} from '../../services/googleDriveAuth';
-import {
-  GOOGLE_DRIVE_PARENT_URL,
-  createFoldersForAllStudents,
-} from '../../services/googleDriveService';
-import {
   Search,
   UserPlus,
   Users,
-  Target,
   Sparkles,
   AlertTriangle,
   ChevronRight,
   Phone,
   Trash2,
-  Activity,
-  Filter,
-  Folder,
-  ExternalLink,
+  UserCheck,
 } from 'lucide-react';
 
 interface StudentListProps {
@@ -37,64 +25,20 @@ interface StudentListProps {
 }
 
 export const StudentList: React.FC<StudentListProps> = ({ onSelectStudent }) => {
-  const { students, selectedStudent, getStudentMetrics, deleteStudent, canCreateStudent } = useHealth();
+  const {
+    students,
+    selectedStudent,
+    getStudentMetrics,
+    deleteStudent,
+    canCreateStudent,
+    currentUser,
+    isAdmin,
+  } = useHealth();
   const [searchTerm, setSearchTerm] = useState('');
   const [genderFilter, setGenderFilter] = useState<string>('ALL');
   const [alertFilter, setAlertFilter] = useState<'ALL' | 'HAS_ALERT' | 'HIGH_SCORE'>('ALL');
   const [showAddModal, setShowAddModal] = useState(false);
-
-  // Google Drive Batch Folder Sync State
-  const [googleUser, setGoogleUser] = useState<any>(null);
-  const [googleToken, setGoogleToken] = useState<string | null>(null);
-  const [isSyncingAllFolders, setIsSyncingAllFolders] = useState(false);
-  const [batchSyncResult, setBatchSyncResult] = useState<string | null>(null);
-
-  useEffect(() => {
-    const unsubscribe = initAuth(
-      (user, token) => {
-        setGoogleUser(user);
-        setGoogleToken(token);
-      },
-      () => {
-        setGoogleUser(null);
-        setGoogleToken(null);
-      }
-    );
-    return () => {
-      if (typeof unsubscribe === 'function') unsubscribe();
-    };
-  }, []);
-
-  const handleBatchSyncDriveFolders = async () => {
-    let token = googleToken;
-    if (!token) {
-      try {
-        const res = await googleSignIn();
-        if (res) {
-          token = res.accessToken;
-          setGoogleUser(res.user);
-          setGoogleToken(res.accessToken);
-        }
-      } catch (err: any) {
-        setBatchSyncResult('Lỗi kết nối Google: ' + (err.message || 'Thử lại'));
-        return;
-      }
-    }
-
-    if (!token) return;
-
-    setIsSyncingAllFolders(true);
-    setBatchSyncResult(null);
-    try {
-      const results = await createFoldersForAllStudents(token, students);
-      setBatchSyncResult(`Đã đồng bộ/tạo thành công ${results.length} thư mục học viên trên Google Drive!`);
-    } catch (err: any) {
-      console.error('Lỗi tạo hàng loạt thư mục:', err);
-      setBatchSyncResult('Lỗi khi đồng bộ thư mục: ' + (err.message || 'Thử lại'));
-    } finally {
-      setIsSyncingAllFolders(false);
-    }
-  };
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   // Compute student stats with score & anomalies
   const studentsWithStats = useMemo(() => {
@@ -119,7 +63,8 @@ export const StudentList: React.FC<StudentListProps> = ({ onSelectStudent }) => 
       const matchSearch =
         s.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
         s.phone.includes(searchTerm) ||
-        s.healthGoal.toLowerCase().includes(searchTerm.toLowerCase());
+        s.healthGoal.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (s.trainerName || '').toLowerCase().includes(searchTerm.toLowerCase());
 
       const matchGender = genderFilter === 'ALL' || s.gender === genderFilter;
 
@@ -134,95 +79,50 @@ export const StudentList: React.FC<StudentListProps> = ({ onSelectStudent }) => 
     });
   }, [studentsWithStats, searchTerm, genderFilter, alertFilter]);
 
-  const handleDelete = (e: React.MouseEvent, id: string, name: string) => {
-    e.stopPropagation();
-    if (window.confirm(`Bạn có chắc chắn muốn xóa hồ sơ học viên "${name}" cùng toàn bộ dữ liệu lịch sử không?`)) {
-      deleteStudent(id);
-    }
-  };
-
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* Top Banner / Stat Overview */}
-      <div className="bg-white rounded-3xl p-6 border border-slate-200/90 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center space-x-2">
-            <h1 className="text-xl font-extrabold text-slate-900 tracking-tight">
+      <div className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-6 border border-slate-200/90 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-lg sm:text-xl font-extrabold text-slate-900 tracking-tight">
               Danh Sách Học Viên Đang Quản Lý
             </h1>
-            <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800">
+            <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 shrink-0">
               {students.length} hồ sơ
             </span>
+            {!isAdmin && currentUser && (
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-50 text-indigo-800 border border-indigo-200">
+                HLV phụ trách: {currentUser.fullName}
+              </span>
+            )}
           </div>
           <p className="text-xs text-slate-500 mt-1">
             Theo dõi hành trình thể trạng, kiểm soát rủi ro chuyển hóa và chuẩn hóa vận hành dịch vụ HLV
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5 self-start md:self-auto">
-          <button
-            type="button"
-            onClick={handleBatchSyncDriveFolders}
-            disabled={isSyncingAllFolders}
-            className="px-3.5 py-2.5 bg-white hover:bg-slate-50 text-slate-800 rounded-xl text-xs font-bold transition-all border border-slate-300 shadow-2xs flex items-center space-x-1.5 cursor-pointer active:scale-98"
-          >
-            <Folder className="w-4 h-4 text-emerald-600" />
-            <span>{isSyncingAllFolders ? 'Đang đồng bộ Drive...' : 'Tạo Thư Mục Drive Cho Tất Cả Học Viên'}</span>
-          </button>
-
-          <a
-            href={GOOGLE_DRIVE_PARENT_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl border border-slate-200 transition-colors"
-            title="Mở thư mục gốc Google Drive"
-          >
-            <ExternalLink className="w-4 h-4" />
-          </a>
-
-          {canCreateStudent ? (
+        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+          {canCreateStudent && (
             <button
               onClick={() => setShowAddModal(true)}
-              className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-600/20 flex items-center space-x-2 cursor-pointer"
+              className="w-full sm:w-auto justify-center px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-600/20 flex items-center space-x-2 cursor-pointer"
             >
-              <UserPlus className="w-4 h-4" />
-              <span>Thêm Học Viên Mới (trunghbl)</span>
+              <UserPlus className="w-4 h-4 shrink-0" />
+              <span>Thêm Học Viên Mới</span>
             </button>
-          ) : (
-            <div className="px-3.5 py-2 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-semibold flex items-center space-x-1.5">
-              <span>Chỉ tài khoản trunghbl mới có quyền tạo học viên</span>
-            </div>
           )}
         </div>
       </div>
 
-      {/* Batch Sync Result Notification */}
-      {batchSyncResult && (
-        <div className="p-3.5 bg-emerald-50 border border-emerald-300 rounded-2xl text-emerald-950 text-xs font-semibold flex items-center justify-between animate-in fade-in">
-          <div className="flex items-center space-x-2">
-            <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span>{batchSyncResult}</span>
-          </div>
-          <a
-            href={GOOGLE_DRIVE_PARENT_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline font-bold hover:text-emerald-800 flex items-center space-x-1 ml-3"
-          >
-            <span>Mở Drive xem ngay</span>
-            <ExternalLink className="w-3.5 h-3.5" />
-          </a>
-        </div>
-      )}
-
       {/* Search & Filter Bar */}
-      <div className="bg-white rounded-2xl p-4 border border-slate-200/90 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+      <div className="bg-white rounded-2xl p-3.5 sm:p-4 border border-slate-200/90 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
         {/* Search Input */}
         <div className="relative w-full sm:w-80">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
           <input
             type="text"
-            placeholder="Tìm theo tên, số điện thoại, mục tiêu..."
+            placeholder="Tìm theo tên, SĐT, mục tiêu, HLV..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-hidden font-medium"
@@ -235,7 +135,7 @@ export const StudentList: React.FC<StudentListProps> = ({ onSelectStudent }) => 
           <select
             value={genderFilter}
             onChange={(e) => setGenderFilter(e.target.value)}
-            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-700 outline-hidden"
+            className="flex-1 sm:flex-initial min-w-0 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-700 outline-hidden"
           >
             <option value="ALL">Tất cả giới tính</option>
             <option value="Nam">Nam</option>
@@ -246,7 +146,7 @@ export const StudentList: React.FC<StudentListProps> = ({ onSelectStudent }) => 
           <select
             value={alertFilter}
             onChange={(e: any) => setAlertFilter(e.target.value)}
-            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-700 outline-hidden"
+            className="flex-1 sm:flex-initial min-w-0 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-700 outline-hidden"
           >
             <option value="ALL">Tất cả trạng thái</option>
             <option value="HAS_ALERT">Có cảnh báo sức khỏe ⚠️</option>
@@ -257,10 +157,12 @@ export const StudentList: React.FC<StudentListProps> = ({ onSelectStudent }) => 
 
       {/* Students Grid */}
       {filtered.length === 0 ? (
-        <div className="py-20 text-center bg-white rounded-3xl border border-slate-200">
+        <div className="py-20 text-center bg-white rounded-2xl sm:rounded-3xl border border-slate-200">
           <Users className="w-12 h-12 text-slate-300 mx-auto mb-2" />
           <h4 className="font-bold text-slate-700 text-sm">Không tìm thấy học viên phù hợp</h4>
-          <p className="text-xs text-slate-400 mt-1">Thử thay đổi từ khóa tìm kiếm hoặc bộ lọc</p>
+          <p className="text-xs text-slate-400 mt-1">
+            Bấm &ldquo;Thêm Học Viên Mới&rdquo; để khởi tạo hồ sơ học viên đầu tiên vào Database
+          </p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -270,31 +172,29 @@ export const StudentList: React.FC<StudentListProps> = ({ onSelectStudent }) => 
               <div
                 key={s.id}
                 onClick={() => onSelectStudent(s)}
-                className={`bg-white rounded-3xl p-5 border transition-all cursor-pointer hover:shadow-md relative group ${
+                className={`bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-5 border transition-all cursor-pointer hover:shadow-md relative group ${
                   isSelected
                     ? 'border-emerald-600 ring-2 ring-emerald-500/20 shadow-sm'
                     : 'border-slate-200/90 hover:border-slate-300'
                 }`}
               >
-                {/* Top Row: Avatar, Name, Score Badge */}
+                {/* Top Row: Name, Score Badge */}
                 <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center space-x-3.5">
-                    <img
-                      src={
-                        s.avatarUrl ||
-                        'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80'
-                      }
-                      alt={s.fullName}
-                      className="w-14 h-14 rounded-2xl object-cover ring-2 ring-slate-100 shrink-0"
-                    />
+                  <div className="min-w-0">
                     <div>
-                      <div className="flex items-center space-x-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <h3 className="font-extrabold text-slate-900 text-sm group-hover:text-emerald-700 transition-colors">
                           {s.fullName}
                         </h3>
                         <span className="text-[11px] font-semibold text-slate-500">
                           {s.gender} • {s.age}t
                         </span>
+                        {s.trainerName && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200 inline-flex items-center gap-1">
+                            <UserCheck className="w-3 h-3" />
+                            HLV: {s.trainerName}
+                          </span>
+                        )}
                       </div>
                       <div className="text-[11px] text-slate-400 flex items-center space-x-2 mt-0.5">
                         <span className="flex items-center">
@@ -389,18 +289,45 @@ export const StudentList: React.FC<StudentListProps> = ({ onSelectStudent }) => 
                     {metrics.length} lần cân đo • Lần cuối: {latest ? latest.date : 'Chưa có'}
                   </span>
 
-                  <div className="flex items-center space-x-1">
+                  <div className="flex items-center space-x-1" onClick={(e) => e.stopPropagation()}>
+                    {confirmDeleteId === s.id ? (
+                      <div className="flex items-center space-x-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            deleteStudent(s.id);
+                            setConfirmDeleteId(null);
+                          }}
+                          className="px-2 py-1 bg-rose-600 text-white rounded-lg text-[10px] font-bold cursor-pointer"
+                        >
+                          Xác nhận xóa
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteId(null)}
+                          className="px-2 py-1 bg-slate-200 text-slate-700 rounded-lg text-[10px] font-bold cursor-pointer"
+                        >
+                          Hủy
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteId(s.id)}
+                        className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
+                        title="Xóa hồ sơ"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
                     <button
-                      onClick={(e) => handleDelete(e, s.id, s.fullName)}
-                      className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
-                      title="Xóa hồ sơ"
+                      type="button"
+                      onClick={() => onSelectStudent(s)}
+                      className="font-bold text-emerald-700 flex items-center group-hover:translate-x-0.5 transition-transform cursor-pointer"
                     >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                    <span className="font-bold text-emerald-700 flex items-center group-hover:translate-x-0.5 transition-transform">
                       <span>Chi tiết</span>
                       <ChevronRight className="w-4 h-4 ml-0.5" />
-                    </span>
+                    </button>
                   </div>
                 </div>
               </div>

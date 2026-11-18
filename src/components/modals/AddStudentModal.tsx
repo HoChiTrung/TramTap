@@ -6,7 +6,8 @@
 import React, { useState } from 'react';
 import { StudentProfile, Gender } from '../../types/health';
 import { useHealth } from '../../context/HealthContext';
-import { X, UserPlus, Sparkles, Target, Phone, MapPin, Calendar } from 'lucide-react';
+import { calculateCalorieGoalBreakdown } from '../../utils/healthCalculations';
+import { X, UserPlus, Target, Flame, UserCheck, Utensils } from 'lucide-react';
 
 interface AddStudentModalProps {
   initialStudent?: StudentProfile;
@@ -17,24 +18,43 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
   initialStudent,
   onClose,
 }) => {
-  const { addStudent, updateStudent } = useHealth();
+  const {
+    addStudent,
+    updateStudent,
+    getStudentMetrics,
+    currentUser,
+    isAdmin,
+    trainers,
+  } = useHealth();
+  const studentMetrics = initialStudent ? getStudentMetrics(initialStudent.id) : [];
+  const latestMetric = studentMetrics[studentMetrics.length - 1];
 
   const [fullName, setFullName] = useState(initialStudent?.fullName || '');
   const [gender, setGender] = useState<Gender>(initialStudent?.gender || 'Nam');
   const [age, setAge] = useState(initialStudent ? String(initialStudent.age) : '25');
   const [height, setHeight] = useState(initialStudent ? String(initialStudent.height) : '1.70');
   const [phone, setPhone] = useState(initialStudent?.phone || '');
-  const [address, setAddress] = useState(initialStudent?.address || '');
   const [dateOfBirth, setDateOfBirth] = useState(initialStudent?.dateOfBirth || '2000-01-01');
   const [healthGoal, setHealthGoal] = useState(initialStudent?.healthGoal || '');
-  const [avatarUrl, setAvatarUrl] = useState(
-    initialStudent?.avatarUrl ||
-      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80'
+  const [selectedTrainerId, setSelectedTrainerId] = useState(
+    initialStudent?.trainerId || currentUser?.id || ''
+  );
+
+  // Meal Ticket Portions Package (30 khẩu phần or 60 khẩu phần or custom)
+  const [totalMealPortions, setTotalMealPortions] = useState(
+    initialStudent?.targetMetrics?.totalMealPortions
+      ? String(initialStudent.targetMetrics.totalMealPortions)
+      : '60'
   );
 
   // Targets
   const [targetWeight, setTargetWeight] = useState(
     initialStudent?.targetMetrics?.targetWeight ? String(initialStudent.targetMetrics.targetWeight) : ''
+  );
+  const [targetDurationWeeks, setTargetDurationWeeks] = useState(
+    initialStudent?.targetMetrics?.targetDurationWeeks
+      ? String(initialStudent.targetMetrics.targetDurationWeeks)
+      : '8'
   );
   const [targetVisceralFat, setTargetVisceralFat] = useState(
     initialStudent?.targetMetrics?.targetVisceralFat !== undefined
@@ -82,6 +102,11 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
       newErrors.phone = 'Vui lòng nhập số điện thoại hợp lệ (từ 6 đến 15 số)';
     }
 
+    const parsedPortions = parseInt(totalMealPortions, 10);
+    if (isNaN(parsedPortions) || parsedPortions < 1 || parsedPortions > 360) {
+      newErrors.totalMealPortions = 'Số khẩu phần ăn phải từ 1 đến 360 (thường là 30 hoặc 60)';
+    }
+
     const finalGoal =
       healthGoal.trim() || 'Cân đối vóc dáng, giảm mỡ nội tạng và cải thiện sức khỏe toàn diện';
 
@@ -92,10 +117,20 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
 
     const targetMetrics = {
       targetWeight: targetWeight ? parseFloat(targetWeight) : undefined,
+      targetDurationWeeks: targetDurationWeeks ? Math.max(1, parseInt(targetDurationWeeks, 10)) : 8,
       targetVisceralFat: targetVisceralFat ? parseInt(targetVisceralFat, 10) : undefined,
       targetMuscleMass: targetMuscleMass ? parseFloat(targetMuscleMass) : undefined,
       targetWaist: targetWaist ? parseFloat(targetWaist) : undefined,
+      totalMealPortions: parsedPortions,
     };
+
+    const assignedTrainer = trainers.find((t) => t.id === selectedTrainerId);
+    const resolvedTrainerId = assignedTrainer
+      ? assignedTrainer.id
+      : currentUser?.id || '';
+    const resolvedTrainerName = assignedTrainer
+      ? assignedTrainer.fullName
+      : currentUser?.fullName || '';
 
     try {
       setIsSubmitting(true);
@@ -107,11 +142,13 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
           age: ageNum,
           height: heightNum,
           phone: phone.trim(),
-          address: address.trim(),
+          address: '',
           dateOfBirth: dateOfBirth || '2000-01-01',
           healthGoal: finalGoal,
           targetMetrics,
-          avatarUrl,
+          avatarUrl: '',
+          trainerId: resolvedTrainerId,
+          trainerName: resolvedTrainerName,
         });
       } else {
         await addStudent({
@@ -120,11 +157,11 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
           age: ageNum,
           height: heightNum,
           phone: phone.trim(),
-          address: address.trim(),
           dateOfBirth: dateOfBirth || '2000-01-01',
           healthGoal: finalGoal,
           targetMetrics,
-          avatarUrl,
+          trainerId: resolvedTrainerId,
+          trainerName: resolvedTrainerName,
           initialUsername: initialUsername.trim() || phone.trim(),
           initialPassword: initialPassword.trim() || '123',
         });
@@ -138,26 +175,22 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full p-6 my-8 animate-in fade-in zoom-in-95 duration-150 border border-slate-100">
-        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-          <div className="flex items-center space-x-2">
-            <UserPlus className="w-5 h-5 text-emerald-600" />
-            <h3 className="font-bold text-slate-900 text-base">
+    <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full min-w-0 p-4 sm:p-6 my-2 sm:my-8 max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] overflow-y-auto overflow-x-hidden animate-in fade-in zoom-in-95 duration-150 border border-slate-100">
+        <div className="flex items-start sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
+          <div className="flex items-center space-x-2 min-w-0">
+            <UserPlus className="w-5 h-5 text-emerald-600 shrink-0" />
+            <h3 className="font-bold text-slate-900 text-sm sm:text-base break-words">
               {initialStudent ? 'Chỉnh Sửa Hồ Sơ Học Viên' : 'Tạo Hồ Sơ & Tài Khoản Học Viên Mới'}
             </h3>
           </div>
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100"
+            className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 shrink-0 cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
-
-        <p className="text-xs text-slate-500 mt-2">
-          Theo chuẩn SRS 2.1: Quản lý chính xác 8 trường thông tin nền tảng trích xuất từ Sổ Theo Dõi Khách Hàng.
-        </p>
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4 text-xs">
           {/* Full Name & Gender */}
@@ -237,7 +270,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
             </div>
           </div>
 
-          {/* Phone & Address */}
+          {/* Phone & Managing Trainer */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block font-semibold text-slate-700 mb-1">
@@ -257,15 +290,88 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
             </div>
 
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Địa chỉ (Tùy chọn)</label>
-              <input
-                type="text"
-                placeholder="Quận 1, TP.HCM"
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-hidden font-medium"
-              />
+              <label className="block font-semibold text-slate-700 mb-1 flex items-center gap-1">
+                <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Huấn Luyện Viên phụ trách</span>
+              </label>
+              {isAdmin ? (
+                <select
+                  value={selectedTrainerId}
+                  onChange={(e) => setSelectedTrainerId(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-hidden font-semibold text-slate-800"
+                >
+                  {trainers.map((tr) => (
+                    <option key={tr.id} value={tr.id}>
+                      {tr.fullName} (@{tr.username})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-emerald-800 truncate">
+                  {currentUser?.fullName || currentUser?.username}
+                </div>
+              )}
             </div>
+          </div>
+
+          {/* Meal Ticket Portions Package Selection (30 khẩu phần vs 60 khẩu phần) */}
+          <div className="p-3.5 bg-emerald-50/70 rounded-xl border border-emerald-200 space-y-2.5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <div className="flex items-center space-x-1.5 font-bold text-emerald-950 text-xs">
+                  <Utensils className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Gói Phiếu Ăn Đăng Ký (Số Khẩu Phần) *</span>
+                </div>
+                <p className="text-[11px] text-slate-600 mt-0.5">
+                  Chọn loại phiếu <strong>30 khẩu phần</strong> (1 bữa/ngày) hoặc{' '}
+                  <strong>60 khẩu phần</strong> (2 bữa Sáng - Chiều/ngày) hoặc nhập số khẩu phần thực tế.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setTotalMealPortions('30')}
+                className={`py-2 px-3 rounded-xl font-bold text-xs border transition-all cursor-pointer flex items-center justify-center space-x-1.5 ${
+                  totalMealPortions === '30'
+                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                    : 'bg-white text-slate-700 border-slate-200 hover:bg-emerald-50'
+                }`}
+              >
+                <span>Phiếu 30 Khẩu Phần</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setTotalMealPortions('60')}
+                className={`py-2 px-3 rounded-xl font-bold text-xs border transition-all cursor-pointer flex items-center justify-center space-x-1.5 ${
+                  totalMealPortions === '60'
+                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                    : 'bg-white text-slate-700 border-slate-200 hover:bg-emerald-50'
+                }`}
+              >
+                <span>Phiếu 60 Khẩu Phần</span>
+              </button>
+
+              <div className="flex items-center bg-white border border-slate-200 rounded-xl px-2.5 py-1">
+                <span className="text-[11px] text-slate-500 font-semibold mr-2 whitespace-nowrap">
+                  Số khẩu phần:
+                </span>
+                <input
+                  type="number"
+                  min="1"
+                  max="360"
+                  required
+                  value={totalMealPortions}
+                  onChange={(e) => setTotalMealPortions(e.target.value)}
+                  className="w-full text-right font-extrabold text-emerald-800 outline-hidden text-xs"
+                />
+              </div>
+            </div>
+            {errors.totalMealPortions && (
+              <p className="text-rose-500 text-[10px]">{errors.totalMealPortions}</p>
+            )}
           </div>
 
           {/* Health Goal */}
@@ -287,19 +393,43 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
             )}
           </div>
 
-          {/* Target Metrics for Gap Analysis */}
-          <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/80">
-            <div className="flex items-center space-x-1.5 font-bold text-slate-800 text-xs mb-2">
-              <Target className="w-4 h-4 text-emerald-600" />
-              <span>Chỉ Số Mục Tiêu Đo Lường (Đối Soát Gap Analysis)</span>
+          {/* Target Metrics for Gap Analysis & AI Calorie Calculation */}
+          <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/80 space-y-3">
+            <div>
+              <div className="flex items-center space-x-1.5 font-bold text-slate-800 text-xs">
+                <Target className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Chỉ Số Mục Tiêu & Cơ Sở AI Tính Calo Mỗi Ngày</span>
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1">
+                AI tính dựa trên 4 yếu tố: <strong className="text-slate-700">Cân nặng hiện tại</strong>,{' '}
+                <strong className="text-slate-700">Thời gian mong muốn</strong>,{' '}
+                <strong className="text-slate-700">Cân nặng mong muốn</strong> và{' '}
+                <strong className="text-slate-700">Mức mỡ nội tạng</strong>.
+              </p>
             </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div className="px-2.5 py-1.5 bg-white rounded-lg border border-slate-200 flex items-center justify-between">
+                <span className="text-[11px] text-slate-500 font-medium">Cân nặng hiện tại</span>
+                <span className="text-xs font-bold text-slate-900">
+                  {latestMetric ? `${latestMetric.weight} kg` : 'Theo lần đo mới nhất'}
+                </span>
+              </div>
+              <div className="px-2.5 py-1.5 bg-white rounded-lg border border-slate-200 flex items-center justify-between">
+                <span className="text-[11px] text-slate-500 font-medium">Mức mỡ nội tạng</span>
+                <span className="text-xs font-bold text-slate-900">
+                  {latestMetric ? `Cấp ${latestMetric.visceralFat}` : 'Theo lần đo mới nhất'}
+                </span>
+              </div>
+            </div>
+
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
               <div>
-                <label className="text-[11px] text-slate-500 font-medium">Mục tiêu Cân nặng (kg)</label>
+                <label className="text-[11px] text-slate-600 font-medium">Cân nặng mong muốn (kg)</label>
                 <input
                   type="number"
                   step="0.1"
-                  placeholder="72.0"
+                  placeholder="65.0"
                   value={targetWeight}
                   onChange={(e) => setTargetWeight(e.target.value)}
                   className="w-full mt-1 px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs"
@@ -307,9 +437,24 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
               </div>
 
               <div>
-                <label className="text-[11px] text-slate-500 font-medium">Mục tiêu Mỡ nội tạng</label>
+                <label className="text-[11px] text-slate-600 font-medium">Thời gian mong muốn (Tuần)</label>
                 <input
                   type="number"
+                  min="1"
+                  max="52"
+                  placeholder="8"
+                  value={targetDurationWeeks}
+                  onChange={(e) => setTargetDurationWeeks(e.target.value)}
+                  className="w-full mt-1 px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-emerald-800"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-slate-600 font-medium">Mức mỡ nội tạng mục tiêu</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="30"
                   placeholder="5"
                   value={targetVisceralFat}
                   onChange={(e) => setTargetVisceralFat(e.target.value)}
@@ -318,7 +463,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
               </div>
 
               <div>
-                <label className="text-[11px] text-slate-500 font-medium">Mục tiêu Cơ bắp (kg)</label>
+                <label className="text-[11px] text-slate-600 font-medium">Mục tiêu Cơ bắp (kg)</label>
                 <input
                   type="number"
                   step="0.1"
@@ -328,26 +473,57 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
                   className="w-full mt-1 px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs"
                 />
               </div>
-
-              <div>
-                <label className="text-[11px] text-slate-500 font-medium">Mục tiêu Vòng eo (cm)</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  placeholder="78.0"
-                  value={targetWaist}
-                  onChange={(e) => setTargetWaist(e.target.value)}
-                  className="w-full mt-1 px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs"
-                />
-              </div>
             </div>
+
+            {latestMetric && initialStudent ? (() => {
+              const previewPlan = calculateCalorieGoalBreakdown(
+                latestMetric.bmr,
+                latestMetric.weight,
+                {
+                  ...initialStudent,
+                  healthGoal: healthGoal.trim() || initialStudent.healthGoal,
+                  targetMetrics: {
+                    ...initialStudent.targetMetrics,
+                    targetWeight: targetWeight ? parseFloat(targetWeight) : undefined,
+                    targetDurationWeeks: targetDurationWeeks
+                      ? Math.max(1, parseInt(targetDurationWeeks, 10))
+                      : 8,
+                    targetVisceralFat: targetVisceralFat
+                      ? parseInt(targetVisceralFat, 10)
+                      : undefined,
+                  },
+                },
+                1.375,
+                latestMetric.visceralFat
+              );
+              return (
+                <div className="p-2.5 rounded-lg bg-orange-50/90 border border-orange-200 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                  <span className="flex items-center font-bold text-orange-950">
+                    <Flame className="w-3.5 h-3.5 mr-1 text-orange-600 shrink-0" />
+                    {previewPlan.label}:
+                  </span>
+                  <span className="font-black text-orange-700">
+                    {previewPlan.mode === 'weight_loss'
+                      ? '≤ '
+                      : previewPlan.mode === 'weight_gain'
+                      ? '≥ '
+                      : ''}
+                    {previewPlan.targetDailyCalories} Kcal/ngày
+                  </span>
+                </div>
+              );
+            })() : (
+              <div className="text-[10.5px] text-slate-500 bg-white/80 px-2.5 py-1.5 rounded-lg border border-slate-200/70">
+                Sau khi nhập lần cân đo đầu tiên (có Cân nặng hiện tại &amp; Mức mỡ nội tạng), AI sẽ tự động tính mức Calo nạp mỗi ngày.
+              </div>
+            )}
           </div>
 
           {/* Student Login Account Setup (Only when creating new student) */}
           {!initialStudent && (
-            <div className="p-3.5 bg-emerald-50/60 rounded-xl border border-emerald-200">
-              <div className="font-bold text-emerald-950 text-xs mb-1.5 flex items-center">
-                <span>Khởi Tạo Tài Khoản Đăng Nhập Cho Học Viên</span>
+            <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200">
+              <div className="font-bold text-slate-900 text-xs mb-1.5 flex items-center">
+                <span>Khởi Tạo Tài Khoản Đăng Nhập Cho Học Viên (Lưu Database)</span>
               </div>
               <p className="text-[10px] text-slate-500 mb-2.5">
                 Cung cấp thông tin đăng nhập để học viên có thể vào Cổng Học Viên theo dõi tiến trình
@@ -381,17 +557,6 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
             </div>
           )}
 
-          {/* Avatar URL */}
-          <div>
-            <label className="block font-semibold text-slate-700 mb-1">Ảnh đại diện (URL)</label>
-            <input
-              type="text"
-              value={avatarUrl}
-              onChange={(e) => setAvatarUrl(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-hidden font-mono text-xs"
-            />
-          </div>
-
           {Object.keys(errors).length > 0 && (
             <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
               {Object.values(errors)[0]}
@@ -399,18 +564,18 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
           )}
 
           {/* Form Actions */}
-          <div className="pt-3 border-t border-slate-100 flex items-center justify-end space-x-2">
+          <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 border border-slate-200 rounded-xl font-semibold text-slate-600 hover:bg-slate-50 transition-colors cursor-pointer"
+              className="flex-1 sm:flex-initial px-4 py-2 border border-slate-200 rounded-xl font-semibold text-slate-600 hover:bg-slate-50 transition-colors cursor-pointer"
             >
               Hủy
             </button>
             <button
               type="submit"
               disabled={isSubmitting}
-              className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-semibold transition-colors shadow-xs cursor-pointer disabled:opacity-50"
+              className="flex-1 sm:flex-initial px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-semibold transition-colors shadow-xs cursor-pointer disabled:opacity-50 whitespace-nowrap"
             >
               {isSubmitting ? 'Đang lưu...' : initialStudent ? 'Lưu Thay Đổi' : 'Tạo Học Viên'}
             </button>

@@ -3,20 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { useHealth } from '../../context/HealthContext';
 import { calculateHealthScore } from '../../utils/healthCalculations';
 import {
   X,
   Printer,
   Share2,
-  Download,
   Activity,
-  CheckCircle2,
-  Calendar,
-  Sparkles,
   ShieldCheck,
-  Award,
 } from 'lucide-react';
 
 export const PrintableReportModal: React.FC = () => {
@@ -24,7 +19,6 @@ export const PrintableReportModal: React.FC = () => {
     selectedStudent,
     getStudentMetrics,
     getStudentAdvices,
-    getStudentPhotos,
     openReportModal,
     setOpenReportModal,
   } = useHealth();
@@ -35,16 +29,10 @@ export const PrintableReportModal: React.FC = () => {
 
   const metrics = getStudentMetrics(selectedStudent.id);
   const advices = getStudentAdvices(selectedStudent.id);
-  const photos = getStudentPhotos(selectedStudent.id);
 
   const latestMetric = metrics[metrics.length - 1];
   const approvedAdvice = advices.find((a) => a.status === 'trainer_approved') || advices[0];
   const healthScore = latestMetric ? calculateHealthScore(selectedStudent, latestMetric) : null;
-
-  const beforePhoto = photos.find((p) => p.photoType === 'before') || photos[0];
-  const afterPhoto =
-    photos.find((p) => p.photoType === 'after') ||
-    (photos.length > 1 ? photos[photos.length - 1] : photos[0]);
 
   const handlePrint = () => {
     window.print();
@@ -72,7 +60,7 @@ export const PrintableReportModal: React.FC = () => {
           <div className="flex items-center space-x-2">
             <button
               onClick={handleShare}
-              className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-semibold flex items-center space-x-1.5 transition-colors"
+              className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-semibold flex items-center space-x-1.5 transition-colors cursor-pointer"
             >
               <Share2 className="w-3.5 h-3.5" />
               <span>{shareSuccess ? 'Đã sao chép liên kết!' : 'Chia sẻ Zalo/Link'}</span>
@@ -80,7 +68,7 @@ export const PrintableReportModal: React.FC = () => {
 
             <button
               onClick={handlePrint}
-              className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all shadow-xs"
+              className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all shadow-xs cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5" />
               <span>In Ngay / Lưu PDF (A4)</span>
@@ -88,7 +76,7 @@ export const PrintableReportModal: React.FC = () => {
 
             <button
               onClick={() => setOpenReportModal(false)}
-              className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-white/10"
+              className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-white/10 cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
@@ -140,9 +128,17 @@ export const PrintableReportModal: React.FC = () => {
                   <span className="text-slate-400 font-medium">Số điện thoại:</span>
                   <div className="font-bold text-slate-900 font-mono">{selectedStudent.phone}</div>
                 </div>
-                <div className="col-span-2 sm:col-span-4 pt-2 border-t border-slate-200/80">
-                  <span className="text-slate-500 font-semibold">Mục tiêu sức khỏe (Baseline Target):</span>{' '}
-                  <span className="font-bold text-emerald-900">{selectedStudent.healthGoal}</span>
+                <div className="col-span-2 sm:col-span-4 pt-2 border-t border-slate-200/80 flex flex-wrap justify-between gap-2">
+                  <div>
+                    <span className="text-slate-500 font-semibold">Mục tiêu sức khỏe (Baseline Target):</span>{' '}
+                    <span className="font-bold text-emerald-900">{selectedStudent.healthGoal}</span>
+                  </div>
+                  {selectedStudent.trainerName && (
+                    <div>
+                      <span className="text-slate-500 font-semibold">HLV phụ trách:</span>{' '}
+                      <span className="font-bold text-indigo-900">{selectedStudent.trainerName}</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -254,49 +250,7 @@ export const PrintableReportModal: React.FC = () => {
               </div>
             </div>
 
-            {/* 4. Body Part 3: Hình ảnh so sánh Before & After */}
-            {photos.length >= 2 && (
-              <div className="mt-6">
-                <div className="flex items-center justify-between pb-2 mb-3 border-b border-slate-200">
-                  <h3 className="font-black text-slate-900 text-sm uppercase tracking-wide flex items-center">
-                    <span className="w-2 h-2 rounded-full bg-teal-600 mr-2"></span>
-                    Phần 3: Hình Ảnh So Sánh Vóc Dáng (Before & After)
-                  </h3>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4 max-w-lg mx-auto">
-                  <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-center text-xs">
-                    <span className="font-bold text-slate-800 block mb-1">
-                      KHỞI ĐIỂM (BEFORE) • {beforePhoto.weight}kg
-                    </span>
-                    <div className="aspect-3/4 rounded-lg overflow-hidden bg-slate-200">
-                      <img
-                        src={beforePhoto.imageUrl}
-                        alt="Before"
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                    <div className="mt-1 text-[10px] text-slate-400">Ngày chụp: {beforePhoto.date}</div>
-                  </div>
-
-                  <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-center text-xs">
-                    <span className="font-bold text-emerald-800 block mb-1">
-                      HIỆN TẠI (AFTER) • {afterPhoto.weight}kg
-                    </span>
-                    <div className="aspect-3/4 rounded-lg overflow-hidden bg-slate-200">
-                      <img
-                        src={afterPhoto.imageUrl}
-                        alt="After"
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                    <div className="mt-1 text-[10px] text-slate-400">Ngày chụp: {afterPhoto.date}</div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* 5. Footer: Health Score + Lời khuyên chính thức */}
+            {/* 4. Footer: Health Score + Lời khuyên chính thức */}
             <div className="mt-6 pt-5 border-t-2 border-emerald-700">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-slate-200">
                 <div className="flex items-center space-x-3">
@@ -318,26 +272,72 @@ export const PrintableReportModal: React.FC = () => {
                 </div>
               </div>
 
-              {/* Official Advice */}
-              <div className="mt-4 p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs">
-                <div className="font-extrabold text-slate-900 mb-1 flex items-center space-x-1.5">
-                  <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                  <span>Lời Khuyên Chính Thức Đã Duyệt Từ HLV & AI Assistant:</span>
+              {/* Official 3-Part Clinical Advice */}
+              <div className="mt-4 p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-3">
+                <div className="font-extrabold text-slate-900 flex items-center justify-between border-b border-slate-200 pb-2">
+                  <div className="flex items-center space-x-1.5">
+                    <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                    <span>PHÂN TÍCH SỨC KHỎE & PHÁC ĐỒ HÀNH ĐỘNG 3 PHẦN (HLV & AI ASSISTANT):</span>
+                  </div>
+                  {approvedAdvice && (
+                    <span className="text-[11px] font-bold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-full">
+                      Kỳ đo: {approvedAdvice.date}
+                    </span>
+                  )}
                 </div>
-                <p className="text-slate-700 leading-relaxed font-medium">
-                  {approvedAdvice?.trainerEditedContent || approvedAdvice?.aiDraftContent.summary || 'Học viên tiếp tục tuân thủ chế độ dinh dưỡng và giáo án tập luyện theo chỉ dẫn của Huấn luyện viên.'}
-                </p>
 
-                {approvedAdvice && (
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] pt-2 border-t border-slate-200 text-slate-600">
-                    <div>
-                      <strong>Dinh dưỡng:</strong> {approvedAdvice.aiDraftContent.nutritionAdvice}
+                {approvedAdvice?.aiDraftContent.warningMetrics && approvedAdvice.aiDraftContent.warningMetrics.length > 0 && (
+                  <div>
+                    <div className="font-bold text-red-900 text-[11px] mb-1 uppercase tracking-wide">
+                      1. Chỉ số cảnh báo y tế:
                     </div>
-                    <div>
-                      <strong>Lối sống:</strong> {approvedAdvice.aiDraftContent.lifestyleTip}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[10.5px]">
+                      {approvedAdvice.aiDraftContent.warningMetrics.map((wm, wIdx) => (
+                        <div key={wIdx} className="p-1.5 bg-white rounded-lg border border-slate-200">
+                          <strong className="text-slate-900">{wm.name}</strong>: {wm.value} (Chuẩn: {wm.standard})
+                          <div className="text-slate-600 italic">⚠️ {wm.risk}</div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
+
+                {approvedAdvice?.aiDraftContent.deepAssessment && (
+                  <div className="pt-2 border-t border-slate-200/80">
+                    <div className="font-bold text-indigo-900 text-[11px] mb-1 uppercase tracking-wide">
+                      2. Đánh giá chuyên sâu:
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10.5px] text-slate-700">
+                      <div className="p-2 bg-white rounded-lg border border-slate-200">
+                        <strong>Thể trạng & Cơ mỡ:</strong> {approvedAdvice.aiDraftContent.deepAssessment.bodyCompositionAnalysis}
+                      </div>
+                      <div className="p-2 bg-white rounded-lg border border-slate-200">
+                        <strong>Mỡ nội tạng & Lão hóa:</strong> {approvedAdvice.aiDraftContent.deepAssessment.visceralAndAgingRisk}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="pt-2 border-t border-slate-200/80">
+                  <div className="font-bold text-emerald-900 text-[11px] mb-1 uppercase tracking-wide">
+                    3. Khuyến nghị hành động cụ thể:
+                  </div>
+                  {approvedAdvice?.aiDraftContent.actionRecommendations && approvedAdvice.aiDraftContent.actionRecommendations.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[10.5px]">
+                      {approvedAdvice.aiDraftContent.actionRecommendations.map((act, aIdx) => (
+                        <div key={aIdx} className="p-2 bg-white rounded-lg border border-emerald-200">
+                          <div className="font-bold text-slate-900">{act.area}</div>
+                          <div className="text-slate-700">{act.action}</div>
+                          <div className="font-semibold text-emerald-800 mt-0.5">Mục tiêu: {act.target}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-slate-700 leading-relaxed font-medium">
+                      {approvedAdvice?.trainerEditedContent || approvedAdvice?.aiDraftContent.summary || 'Học viên tiếp tục tuân thủ chế độ dinh dưỡng và giáo án tập luyện theo chỉ dẫn của Huấn luyện viên.'}
+                    </p>
+                  )}
+                </div>
               </div>
 
               {/* Signatures */}
@@ -349,9 +349,11 @@ export const PrintableReportModal: React.FC = () => {
                 </div>
 
                 <div className="text-center">
-                  <div className="font-bold text-slate-900">HUẤN LUYỆN VIÊN TRƯỞNG</div>
+                  <div className="font-bold text-slate-900">HUẤN LUYỆN VIÊN PHỤ TRÁCH</div>
                   <div className="h-14"></div>
-                  <div className="font-semibold text-emerald-800">HLV Phụ Trách FitTrack Pro</div>
+                  <div className="font-semibold text-emerald-800">
+                    {selectedStudent.trainerName || 'HLV Phụ Trách FitTrack Pro'}
+                  </div>
                 </div>
               </div>
             </div>

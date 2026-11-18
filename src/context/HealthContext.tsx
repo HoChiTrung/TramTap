@@ -3,52 +3,64 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import {
   StudentProfile,
   HealthMetricRecord,
   AIAdviceRecord,
   MealLog,
+  PortionStatus,
   WorkoutLog,
   PhysiquePhoto,
   Badge,
   SmartNotification,
   UserRole,
   AuthUser,
+  UserAccount,
 } from '../types/health';
-import {
-  SEED_STUDENTS,
-  SEED_METRICS,
-  SEED_ADVICES,
-  SEED_MEALS,
-  SEED_WORKOUTS,
-  SEED_PHOTOS,
-  SEED_BADGES,
-  SEED_NOTIFICATIONS,
-} from '../data/seedData';
 import {
   generateInstantAIAdvice,
   detectAnomalies,
 } from '../utils/healthCalculations';
-import { analyzeFoodImageVisuals } from '../utils/mealVisionAnalyzer';
-import { getAccessToken, initAuth } from '../services/googleDriveAuth';
-import {
-  saveCloudDatabaseToDrive,
-  loadCloudDatabaseFromDrive,
-} from '../services/googleDriveService';
 
 interface HealthContextType {
-  // Authentication
+  // Authentication & Accounts
   currentUser: AuthUser | null;
   login: (username: string, pass: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
+  isAdmin: boolean;
   isTrainer: boolean;
   canCreateStudent: boolean;
+  users: UserAccount[];
+  trainers: UserAccount[];
+  createUserAccount: (params: {
+    username: string;
+    password: string;
+    role: UserRole;
+    fullName: string;
+    phone?: string;
+    studentId?: string;
+    trainerId?: string;
+  }) => Promise<{ success: boolean; user?: UserAccount; error?: string }>;
+  updateUserAccount: (
+    id: string,
+    params: {
+      username?: string;
+      password?: string;
+      fullName?: string;
+      phone?: string;
+      role?: UserRole;
+      trainerId?: string;
+    }
+  ) => Promise<{ success: boolean; error?: string }>;
+  deleteUserAccount: (id: string) => Promise<{ success: boolean; error?: string }>;
+  assignStudentToTrainer: (studentId: string, trainerId: string) => Promise<void>;
 
   // Role & selection
   role: UserRole;
   setRole: (role: UserRole) => void;
   students: StudentProfile[];
+  allStudents: StudentProfile[];
   selectedStudent: StudentProfile | null;
   setSelectedStudent: (student: StudentProfile | null) => void;
   metrics: HealthMetricRecord[];
@@ -74,21 +86,21 @@ interface HealthContextType {
     }
   ) => Promise<StudentProfile>;
   updateStudent: (student: StudentProfile) => Promise<void>;
-  updateStudentDriveFolder: (studentId: string, driveFolderUrl: string) => Promise<void>;
   deleteStudent: (id: string) => Promise<void>;
   addMetricRecord: (record: Omit<HealthMetricRecord, 'id' | 'timestamp'>) => Promise<void>;
   deleteMetricRecord: (id: string) => Promise<void>;
   addMealLog: (meal: Omit<MealLog, 'id' | 'loggedAt'>) => Promise<void>;
+  upsertMealTicket: (params: {
+    studentId: string;
+    dayNumber: number;
+    date: string;
+    morningStatus: PortionStatus;
+    afternoonStatus: PortionStatus;
+    note?: string;
+    attendanceStatus?: 'ate' | 'takeaway' | 'weighed_no_meal';
+  }) => Promise<void>;
+  resetStudentMealTickets: (studentId: string) => Promise<void>;
   addMealFeedback: (id: string, reaction: '🔥' | '💪' | '👏' | '❤️', comment?: string) => Promise<void>;
-  analyzeMealPhoto: (params: {
-    imageBase64: string;
-    mimeType?: string;
-    studentGoal?: string;
-    mealType?: string;
-    studentName?: string;
-    dishHint?: string;
-    fileName?: string;
-  }) => Promise<any>;
   addWorkoutLog: (workout: Omit<WorkoutLog, 'id' | 'loggedAt'>) => Promise<void>;
   addWorkoutFeedback: (id: string, reaction: '🔥' | '💪' | '👏' | '❤️', comment?: string) => Promise<void>;
   addPhysiquePhoto: (photo: Omit<PhysiquePhoto, 'id'>) => Promise<void>;
@@ -103,48 +115,37 @@ interface HealthContextType {
 
 const HealthContext = createContext<HealthContextType | undefined>(undefined);
 
-function getDeletedIds(storageKey: string): Set<string> {
+// One-time cleanup of any legacy sample data cached in browser localStorage
+function purgeLegacySampleCache() {
   try {
-    const raw = localStorage.getItem(storageKey);
-    return new Set(raw ? JSON.parse(raw) : []);
-  } catch {
-    return new Set();
-  }
-}
-
-function addDeletedId(storageKey: string, id: string) {
-  try {
-    const set = getDeletedIds(storageKey);
-    set.add(id);
-    localStorage.setItem(storageKey, JSON.stringify(Array.from(set)));
+    if (localStorage.getItem('fit_db_clean_v2') !== 'true') {
+      const keysToRemove = [
+        'fit_students',
+        'fit_selected_student_id',
+        'fit_metrics',
+        'fit_advices',
+        'fit_meals',
+        'fit_workouts',
+        'fit_photos',
+        'fit_badges',
+        'fit_notifications',
+        'fit_custom_users',
+        'fit_deleted_students',
+        'fit_deleted_metrics',
+      ];
+      for (const k of keysToRemove) {
+        localStorage.removeItem(k);
+      }
+      localStorage.setItem('fit_db_clean_v2', 'true');
+    }
   } catch {
     // Ignore storage error
   }
 }
 
-function mergeById<T extends { id: string }>(
-  localItems: T[],
-  remoteOrSeedItems: T[],
-  deletedIds: Set<string> = new Set()
-): T[] {
-  const map = new Map<string, T>();
-  // First add local items so user edits/additions take priority
-  for (const item of localItems) {
-    if (item && item.id && !deletedIds.has(item.id)) {
-      map.set(item.id, item);
-    }
-  }
-  // Then add remote/seed items that aren't already in local or deleted
-  for (const item of remoteOrSeedItems) {
-    if (item && item.id && !deletedIds.has(item.id) && !map.has(item.id)) {
-      map.set(item.id, item);
-    }
-  }
-  return Array.from(map.values());
-}
-
 export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Current logged in user (null = show Login Page)
+  purgeLegacySampleCache();
+
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
     try {
       const saved = localStorage.getItem('fit_auth_user');
@@ -155,482 +156,171 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   });
 
   const [role, setRole] = useState<UserRole>(currentUser?.role || 'trainer');
-
-  const [students, setStudents] = useState<StudentProfile[]>(() => {
-    try {
-      const deleted = getDeletedIds('fit_deleted_students');
-      const saved = localStorage.getItem('fit_students');
-      const parsed: StudentProfile[] = saved ? JSON.parse(saved) : [];
-      const merged = mergeById(parsed, SEED_STUDENTS, deleted);
-      localStorage.setItem('fit_students', JSON.stringify(merged));
-      return merged;
-    } catch {
-      return SEED_STUDENTS;
-    }
-  });
-
-  const [selectedStudent, setSelectedStudent] = useState<StudentProfile | null>(() => {
-    try {
-      const savedId = localStorage.getItem('fit_selected_student_id');
-      const savedList = localStorage.getItem('fit_students');
-      const pool: StudentProfile[] = savedList ? JSON.parse(savedList) : SEED_STUDENTS;
-      return pool.find((s) => s.id === savedId) || pool[0] || SEED_STUDENTS[0];
-    } catch {
-      return SEED_STUDENTS[0];
-    }
-  });
-
-  const [metrics, setMetrics] = useState<HealthMetricRecord[]>(() => {
-    try {
-      const deleted = getDeletedIds('fit_deleted_metrics');
-      const saved = localStorage.getItem('fit_metrics');
-      const parsed: HealthMetricRecord[] = saved ? JSON.parse(saved) : [];
-      const merged = mergeById(parsed, SEED_METRICS, deleted);
-      localStorage.setItem('fit_metrics', JSON.stringify(merged));
-      return merged;
-    } catch {
-      return SEED_METRICS;
-    }
-  });
-
-  const [advices, setAdvices] = useState<AIAdviceRecord[]>(() => {
-    try {
-      const saved = localStorage.getItem('fit_advices');
-      const parsed: AIAdviceRecord[] = saved ? JSON.parse(saved) : [];
-      return mergeById(parsed, SEED_ADVICES);
-    } catch {
-      return SEED_ADVICES;
-    }
-  });
-
-  const [meals, setMeals] = useState<MealLog[]>(() => {
-    try {
-      const saved = localStorage.getItem('fit_meals');
-      const parsed: MealLog[] = saved ? JSON.parse(saved) : [];
-      // Filter out any old broken test meal logs
-      const cleanParsed = parsed.filter(
-        (m) =>
-          m.id !== 'meal-1793863958272' &&
-          m.id !== 'meal-1793863416052' &&
-          !m.nutritionAdvice?.includes('Hãy chọn nhanh món ăn bên dưới')
-      );
-      return mergeById(cleanParsed, SEED_MEALS);
-    } catch {
-      return SEED_MEALS;
-    }
-  });
-
-  const [workouts, setWorkouts] = useState<WorkoutLog[]>(() => {
-    try {
-      const saved = localStorage.getItem('fit_workouts');
-      const parsed: WorkoutLog[] = saved ? JSON.parse(saved) : [];
-      return mergeById(parsed, SEED_WORKOUTS);
-    } catch {
-      return SEED_WORKOUTS;
-    }
-  });
-
-  const [photos, setPhotos] = useState<PhysiquePhoto[]>(() => {
-    try {
-      const saved = localStorage.getItem('fit_photos');
-      const parsed: PhysiquePhoto[] = saved ? JSON.parse(saved) : [];
-      return mergeById(parsed, SEED_PHOTOS);
-    } catch {
-      return SEED_PHOTOS;
-    }
-  });
-
-  const [badges] = useState<Badge[]>(() => {
-    try {
-      const saved = localStorage.getItem('fit_badges');
-      return saved ? JSON.parse(saved) : SEED_BADGES;
-    } catch {
-      return SEED_BADGES;
-    }
-  });
-
-  const [notifications, setNotifications] = useState<SmartNotification[]>(() => {
-    try {
-      const saved = localStorage.getItem('fit_notifications');
-      return saved ? JSON.parse(saved) : SEED_NOTIFICATIONS;
-    } catch {
-      return SEED_NOTIFICATIONS;
-    }
-  });
-
-  const isGitHubPages =
-    typeof window !== 'undefined' && window.location.hostname.endsWith('github.io');
-
-  const [apiAvailable, setApiAvailable] = useState<boolean>(!isGitHubPages);
+  const [users, setUsers] = useState<UserAccount[]>([]);
+  const [allStudents, setAllStudents] = useState<StudentProfile[]>([]);
+  const [selectedStudent, setSelectedStudent] = useState<StudentProfile | null>(null);
+  const [metrics, setMetrics] = useState<HealthMetricRecord[]>([]);
+  const [advices, setAdvices] = useState<AIAdviceRecord[]>([]);
+  const [meals, setMeals] = useState<MealLog[]>([]);
+  const [workouts, setWorkouts] = useState<WorkoutLog[]>([]);
+  const [photos, setPhotos] = useState<PhysiquePhoto[]>([]);
+  const [badges] = useState<Badge[]>([]);
+  const [notifications, setNotifications] = useState<SmartNotification[]>([]);
 
   const [dbStatus, setDbStatus] = useState<{ connected: boolean; name: string }>({
     connected: true,
-    name: isGitHubPages ? 'Cloud & Local DB (GitHub Pages)' : 'Aiven TramTap (PostgreSQL)',
+    name: 'Aiven TramTap (PostgreSQL)',
   });
 
   const [openReportModal, setOpenReportModal] = useState(false);
   const [openStandardsModal, setOpenStandardsModal] = useState(false);
 
-  // Helper to push current database snapshot to Google Drive when token is active
-  const syncSnapshotToDrive = useCallback(
-    async (overrideData?: {
-      students?: StudentProfile[];
-      metrics?: HealthMetricRecord[];
-      advices?: AIAdviceRecord[];
-      meals?: MealLog[];
-      workouts?: WorkoutLog[];
-      photos?: PhysiquePhoto[];
-    }) => {
-      try {
-        const token = await getAccessToken();
-        if (!token) return;
-        const customUsers = JSON.parse(localStorage.getItem('fit_custom_users') || '[]');
-        await saveCloudDatabaseToDrive(token, {
-          students: overrideData?.students || students,
-          customUsers,
-          metrics: overrideData?.metrics || metrics,
-          advices: overrideData?.advices || advices,
-          meals: overrideData?.meals || meals,
-          workouts: overrideData?.workouts || workouts,
-          photos: overrideData?.photos || photos,
-        });
-      } catch {
-        // Ignore background cloud sync error
-      }
-    },
-    [students, metrics, advices, meals, workouts, photos]
+  const trainers = useMemo(
+    () => users.filter((u) => u.role === 'trainer' || u.role === 'admin'),
+    [users]
   );
 
-  // Listen for Google Drive auth token to pull & merge cloud database on GitHub Pages / multi-device
-  useEffect(() => {
-    const unsubscribe = initAuth(async (_user, token) => {
-      if (!token) return;
-      try {
-        const cloudDb = await loadCloudDatabaseFromDrive(token);
-        if (cloudDb) {
-          const deletedStudents = getDeletedIds('fit_deleted_students');
-          const deletedMetrics = getDeletedIds('fit_deleted_metrics');
+  // Filter students based on logged-in user:
+  // - Admin: sees all students
+  // - Trainer: sees students assigned to them (or unassigned legacy students)
+  // - Student: sees their own profile
+  const students = useMemo(() => {
+    if (!currentUser) return allStudents;
+    if (currentUser.role === 'admin') return allStudents;
+    if (currentUser.role === 'trainer') {
+      return allStudents.filter(
+        (s) => !s.trainerId || s.trainerId === currentUser.id
+      );
+    }
+    if (currentUser.role === 'student' && currentUser.studentId) {
+      return allStudents.filter((s) => s.id === currentUser.studentId);
+    }
+    return allStudents;
+  }, [allStudents, currentUser]);
 
-          if (Array.isArray(cloudDb.students) && cloudDb.students.length > 0) {
-            setStudents((prev) => {
-              const merged = mergeById(prev, cloudDb.students, deletedStudents);
-              localStorage.setItem('fit_students', JSON.stringify(merged));
-              return merged;
-            });
-          }
-          if (Array.isArray(cloudDb.customUsers) && cloudDb.customUsers.length > 0) {
-            const localCustom = JSON.parse(localStorage.getItem('fit_custom_users') || '[]');
-            const map = new Map<string, any>();
-            for (const u of [...localCustom, ...cloudDb.customUsers]) {
-              if (u && u.username) map.set(u.username.toLowerCase(), u);
-            }
-            localStorage.setItem('fit_custom_users', JSON.stringify(Array.from(map.values())));
-          }
-          if (Array.isArray(cloudDb.metrics) && cloudDb.metrics.length > 0) {
-            setMetrics((prev) => {
-              const merged = mergeById(prev, cloudDb.metrics, deletedMetrics);
-              localStorage.setItem('fit_metrics', JSON.stringify(merged));
-              return merged;
-            });
-          }
-          if (Array.isArray(cloudDb.advices) && cloudDb.advices.length > 0) {
-            setAdvices((prev) => {
-              const merged = mergeById(prev, cloudDb.advices);
-              localStorage.setItem('fit_advices', JSON.stringify(merged));
-              return merged;
-            });
-          }
-          if (Array.isArray(cloudDb.meals) && cloudDb.meals.length > 0) {
-            setMeals((prev) => {
-              const merged = mergeById(prev, cloudDb.meals);
-              localStorage.setItem('fit_meals', JSON.stringify(merged));
-              return merged;
-            });
-          }
-        }
-      } catch {
-        // Ignore cloud pull error
-      }
-    });
-    return () => {
-      if (typeof unsubscribe === 'function') unsubscribe();
-    };
-  }, []);
-
-  // Sync role and selected student when user changes
+  // Sync role and selected student when user or students list changes
   useEffect(() => {
     if (currentUser) {
       setRole(currentUser.role);
       if (currentUser.role === 'student' && currentUser.studentId) {
-        const found = students.find((s) => s.id === currentUser.studentId);
+        const found = allStudents.find((s) => s.id === currentUser.studentId);
         if (found) setSelectedStudent(found);
+      } else if (
+        (currentUser.role === 'trainer' || currentUser.role === 'admin') &&
+        students.length > 0
+      ) {
+        if (!selectedStudent || !students.some((s) => s.id === selectedStudent.id)) {
+          setSelectedStudent(students[0]);
+        }
+      } else if (students.length === 0) {
+        setSelectedStudent(null);
       }
     }
-  }, [currentUser, students]);
+  }, [currentUser, allStudents, students, selectedStudent]);
 
-  // Sync to API on Mount (skip on GitHub Pages static hosting to avoid 404 errors)
-  useEffect(() => {
-    if (isGitHubPages) {
-      setApiAvailable(false);
-      return;
+  const fetchUsersList = async () => {
+    try {
+      const res = await fetch('/api/users');
+      if (res.ok) {
+        const list = await res.json();
+        if (Array.isArray(list)) {
+          setUsers(list);
+        }
+      }
+    } catch {
+      // Ignore
     }
+  };
 
-    async function loadData() {
+  // Load all data directly from PostgreSQL database API
+  useEffect(() => {
+    async function loadDataFromDatabase() {
       try {
         const healthCheck = await fetch('/api/health').catch(() => null);
-        if (!healthCheck || !healthCheck.ok) {
-          setApiAvailable(false);
-          return;
-        }
-        const healthData = await healthCheck.json().catch(() => null);
-        if (!healthData) {
-          setApiAvailable(false);
-          return;
+        if (healthCheck && healthCheck.ok) {
+          const healthData = await healthCheck.json().catch(() => null);
+          if (healthData) {
+            setDbStatus({
+              connected: healthData.databaseConnected ?? true,
+              name: `${healthData.databaseName || 'TramTap'} (PostgreSQL)`,
+            });
+          }
         }
 
-        setApiAvailable(true);
-        setDbStatus({
-          connected: healthData.databaseConnected ?? true,
-          name: `${healthData.databaseName || 'TramTap'} (PostgreSQL)`,
-        });
-
-        const [resS, resM, resA, resMeals, resW, resP, resN] = await Promise.allSettled([
-          fetch('/api/students').then((r) => (r.ok ? r.json() : null)),
-          fetch('/api/metrics').then((r) => (r.ok ? r.json() : null)),
-          fetch('/api/advices').then((r) => (r.ok ? r.json() : null)),
-          fetch('/api/meals').then((r) => (r.ok ? r.json() : null)),
-          fetch('/api/workouts').then((r) => (r.ok ? r.json() : null)),
-          fetch('/api/photos').then((r) => (r.ok ? r.json() : null)),
-          fetch('/api/notifications').then((r) => (r.ok ? r.json() : null)),
+        const [resU, resS, resM, resA, resMeals, resW, resP, resN] = await Promise.allSettled([
+          fetch('/api/users').then((r) => (r.ok ? r.json() : [])),
+          fetch('/api/students').then((r) => (r.ok ? r.json() : [])),
+          fetch('/api/metrics').then((r) => (r.ok ? r.json() : [])),
+          fetch('/api/advices').then((r) => (r.ok ? r.json() : [])),
+          fetch('/api/meals').then((r) => (r.ok ? r.json() : [])),
+          fetch('/api/workouts').then((r) => (r.ok ? r.json() : [])),
+          fetch('/api/photos').then((r) => (r.ok ? r.json() : [])),
+          fetch('/api/notifications').then((r) => (r.ok ? r.json() : [])),
         ]);
 
-        const deletedStudents = getDeletedIds('fit_deleted_students');
-        const deletedMetrics = getDeletedIds('fit_deleted_metrics');
-
-        if (resS.status === 'fulfilled' && Array.isArray(resS.value) && resS.value.length > 0) {
-          const remoteStudents: StudentProfile[] = resS.value;
-          const remoteIds = new Set(remoteStudents.map((s) => s.id));
-
-          setStudents((prevLocal) => {
-            // Push any locally created students that aren't in remote DB yet
-            for (const localStd of prevLocal) {
-              if (!remoteIds.has(localStd.id) && !deletedStudents.has(localStd.id)) {
-                fetch('/api/students', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'x-auth-username': 'trunghbl',
-                  },
-                  body: JSON.stringify({
-                    ...localStd,
-                    _requestedBy: 'trunghbl',
-                  }),
-                }).catch(() => null);
-              }
+        if (resU.status === 'fulfilled' && Array.isArray(resU.value)) {
+          setUsers(resU.value);
+        }
+        if (resS.status === 'fulfilled' && Array.isArray(resS.value)) {
+          setAllStudents(resS.value);
+          setSelectedStudent((prev) => {
+            if (prev && resS.value.some((s: StudentProfile) => s.id === prev.id)) {
+              return prev;
             }
-
-            const merged = mergeById(prevLocal, remoteStudents, deletedStudents);
-            localStorage.setItem('fit_students', JSON.stringify(merged));
-            return merged;
+            return resS.value[0] || null;
           });
         }
         if (resM.status === 'fulfilled' && Array.isArray(resM.value)) {
-          setMetrics((prev) => {
-            const merged = mergeById(prev, resM.value, deletedMetrics);
-            localStorage.setItem('fit_metrics', JSON.stringify(merged));
-            return merged;
-          });
+          setMetrics(resM.value);
         }
         if (resA.status === 'fulfilled' && Array.isArray(resA.value)) {
-          setAdvices((prev) => {
-            const merged = mergeById(prev, resA.value);
-            localStorage.setItem('fit_advices', JSON.stringify(merged));
-            return merged;
-          });
+          setAdvices(resA.value);
         }
         if (resMeals.status === 'fulfilled' && Array.isArray(resMeals.value)) {
-          const cleanRemoteMeals = resMeals.value.filter(
-            (m: MealLog) =>
-              m.id !== 'meal-1793863958272' &&
-              m.id !== 'meal-1793863416052' &&
-              !m.nutritionAdvice?.includes('Hãy chọn nhanh món ăn bên dưới')
-          );
-          setMeals((prev) => {
-            const merged = mergeById(prev, cleanRemoteMeals);
-            localStorage.setItem('fit_meals', JSON.stringify(merged));
-            return merged;
-          });
+          setMeals(resMeals.value);
         }
         if (resW.status === 'fulfilled' && Array.isArray(resW.value)) {
-          setWorkouts((prev) => {
-            const merged = mergeById(prev, resW.value);
-            localStorage.setItem('fit_workouts', JSON.stringify(merged));
-            return merged;
-          });
+          setWorkouts(resW.value);
         }
         if (resP.status === 'fulfilled' && Array.isArray(resP.value)) {
-          setPhotos((prev) => {
-            const merged = mergeById(prev, resP.value);
-            localStorage.setItem('fit_photos', JSON.stringify(merged));
-            return merged;
-          });
+          setPhotos(resP.value);
         }
         if (resN.status === 'fulfilled' && Array.isArray(resN.value)) {
-          setNotifications((prev) => {
-            const merged = mergeById(prev, resN.value);
-            localStorage.setItem('fit_notifications', JSON.stringify(merged));
-            return merged;
-          });
+          setNotifications(resN.value);
         }
       } catch (err) {
-        setApiAvailable(false);
-        console.warn('API sync warning, using persisted client store', err);
+        console.warn('Database fetch error:', err);
       }
     }
 
-    loadData();
-  }, [isGitHubPages]);
+    loadDataFromDatabase();
+  }, []);
 
-  // Sync selectedStudent ID to localStorage
-  useEffect(() => {
-    if (selectedStudent) {
-      localStorage.setItem('fit_selected_student_id', selectedStudent.id);
-    }
-  }, [selectedStudent]);
-
-  // Local authentication helper (used on GitHub Pages or when backend API is offline)
-  const authenticateLocally = (username: string, pass: string) => {
-    const cleanUser = username.trim().toLowerCase();
-    const cleanPass = pass.trim();
-
-    if (cleanUser === 'trunghbl' && cleanPass === '123') {
-      const trainerUser: AuthUser = {
-        id: 'user-trainer-1',
-        username: 'trunghbl',
-        fullName: 'Huấn Luyện Viên Trung HBL',
-        role: 'trainer',
-        avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
-      };
-      setCurrentUser(trainerUser);
-      setRole('trainer');
-      localStorage.setItem('fit_auth_user', JSON.stringify(trainerUser));
-      return { success: true };
-    }
-
-    const defaultStudents = [
-      { key: 'trungne', name: 'Trung nè', studentId: 'student-1793860586776' },
-      { key: 'hoanglong', name: 'Nguyễn Hoàng Long', studentId: 'student-1' },
-      { key: 'thuha', name: 'Trần Thị Thu Hà', studentId: 'student-2' },
-      { key: 'minhduc', name: 'Phạm Minh Đức', studentId: 'student-3' },
-      { key: 'kimngan', name: 'Lê Kim Ngân', studentId: 'student-4' },
-    ];
-    const matchedDefault = defaultStudents.find((item) => item.key === cleanUser);
-    if (matchedDefault && cleanPass === '123') {
-      const stdUser: AuthUser = {
-        id: `user-${cleanUser}`,
-        username: cleanUser,
-        fullName: matchedDefault.name,
-        role: 'student',
-        studentId: matchedDefault.studentId,
-      };
-      setCurrentUser(stdUser);
-      setRole('student');
-      localStorage.setItem('fit_auth_user', JSON.stringify(stdUser));
-      const found = students.find((s) => s.id === matchedDefault.studentId);
-      if (found) setSelectedStudent(found);
-      return { success: true };
-    }
-
-    // Check custom student accounts created by trainer
-    try {
-      const customAccounts: Array<{
-        username: string;
-        password: string;
-        fullName: string;
-        studentId: string;
-        avatarUrl?: string;
-      }> = JSON.parse(localStorage.getItem('fit_custom_users') || '[]');
-      const matchedCustom = customAccounts.find(
-        (u) => u.username.trim().toLowerCase() === cleanUser && u.password === cleanPass
-      );
-      if (matchedCustom) {
-        const stdUser: AuthUser = {
-          id: `user-${matchedCustom.studentId}`,
-          username: matchedCustom.username,
-          fullName: matchedCustom.fullName,
-          role: 'student',
-          studentId: matchedCustom.studentId,
-          avatarUrl: matchedCustom.avatarUrl,
-        };
-        setCurrentUser(stdUser);
-        setRole('student');
-        localStorage.setItem('fit_auth_user', JSON.stringify(stdUser));
-        const found = students.find((s) => s.id === matchedCustom.studentId);
-        if (found) setSelectedStudent(found);
-        return { success: true };
-      }
-    } catch {
-      // Ignore parse error
-    }
-
-    // Also allow login by student phone number with password '123'
-    const matchedByPhone = students.find((s) => s.phone.replace(/\s+/g, '') === cleanUser);
-    if (matchedByPhone && cleanPass === '123') {
-      const stdUser: AuthUser = {
-        id: `user-${matchedByPhone.id}`,
-        username: matchedByPhone.phone,
-        fullName: matchedByPhone.fullName,
-        role: 'student',
-        studentId: matchedByPhone.id,
-        avatarUrl: matchedByPhone.avatarUrl,
-      };
-      setCurrentUser(stdUser);
-      setRole('student');
-      localStorage.setItem('fit_auth_user', JSON.stringify(stdUser));
-      setSelectedStudent(matchedByPhone);
-      return { success: true };
-    }
-
-    return { success: false, error: 'Tên đăng nhập hoặc mật khẩu không chính xác!' };
-  };
-
-  // Login handler
+  // Login handler against PostgreSQL Database
   const login = async (username: string, pass: string) => {
-    // First check local custom accounts so newly added students always log in immediately
-    const localCheck = authenticateLocally(username, pass);
-    if (localCheck.success) {
-      return localCheck;
-    }
-
-    if (!apiAvailable || isGitHubPages) {
-      return localCheck;
-    }
-
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password: pass }),
       });
-      if (res.status === 404 || res.status === 405) {
-        setApiAvailable(false);
-        return localCheck;
-      }
       const data = await res.json();
       if (res.ok && data.success && data.user) {
         setCurrentUser(data.user);
         setRole(data.user.role);
         localStorage.setItem('fit_auth_user', JSON.stringify(data.user));
 
+        await fetchUsersList();
+
         if (data.user.role === 'student' && data.user.studentId) {
-          const found = students.find((s) => s.id === data.user.studentId);
+          const found = allStudents.find((s) => s.id === data.user.studentId);
           if (found) setSelectedStudent(found);
         }
         return { success: true };
       }
       return { success: false, error: data.error || 'Đăng nhập không thành công' };
     } catch {
-      return localCheck;
+      return { success: false, error: 'Không thể kết nối máy chủ cơ sở dữ liệu!' };
     }
   };
 
@@ -639,10 +329,74 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     localStorage.removeItem('fit_auth_user');
   };
 
-  // Permission: Trainer / trunghbl can create students
-  const isTrainer = currentUser?.role === 'trainer';
+  const isAdmin = currentUser?.role === 'admin';
+  const isTrainer = currentUser?.role === 'trainer' || currentUser?.role === 'admin';
   const canCreateStudent =
-    currentUser?.role === 'trainer' || currentUser?.username?.toLowerCase() === 'trunghbl';
+    currentUser?.role === 'trainer' || currentUser?.role === 'admin';
+
+  // User Accounts CRUD in Database
+  const createUserAccount: HealthContextType['createUserAccount'] = async (params) => {
+    try {
+      const res = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Không thể tạo tài khoản' };
+      }
+      await fetchUsersList();
+      return { success: true, user: data };
+    } catch {
+      return { success: false, error: 'Lỗi kết nối khi tạo tài khoản' };
+    }
+  };
+
+  const updateUserAccount: HealthContextType['updateUserAccount'] = async (id, params) => {
+    try {
+      const res = await fetch(`/api/users/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Không thể cập nhật tài khoản' };
+      }
+      await fetchUsersList();
+      return { success: true };
+    } catch {
+      return { success: false, error: 'Lỗi kết nối khi cập nhật tài khoản' };
+    }
+  };
+
+  const deleteUserAccount: HealthContextType['deleteUserAccount'] = async (id) => {
+    try {
+      const res = await fetch(`/api/users/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Không thể xóa tài khoản' };
+      }
+      setUsers((prev) => prev.filter((u) => u.id !== id));
+      return { success: true };
+    } catch {
+      return { success: false, error: 'Lỗi kết nối khi xóa tài khoản' };
+    }
+  };
+
+  const assignStudentToTrainer = async (studentId: string, trainerId: string) => {
+    const student = allStudents.find((s) => s.id === studentId);
+    if (!student) return;
+    const trainer = users.find((u) => u.id === trainerId);
+    const updatedStudent: StudentProfile = {
+      ...student,
+      trainerId: trainer ? trainer.id : '',
+      trainerName: trainer ? trainer.fullName : '',
+    };
+    await updateStudent(updatedStudent);
+    await fetchUsersList();
+  };
 
   const getStudentMetrics = (studentId: string) => {
     return metrics
@@ -668,13 +422,24 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const unreadNotificationCount = notifications.filter((n) => !n.read).length;
 
-  // Add Student - Persists immediately to localStorage, remote PostgreSQL, and Google Drive Cloud DB
+  // Add Student -> Saves directly to PostgreSQL database and binds to managing Trainer
   const addStudent = async (
     studentData: Omit<StudentProfile, 'id' | 'createdAt'> & {
       initialUsername?: string;
       initialPassword?: string;
     }
   ) => {
+    const resolvedTrainerId =
+      studentData.trainerId ||
+      (currentUser?.role === 'trainer' || currentUser?.role === 'admin' ? currentUser.id : '');
+    const trainerAccount = users.find((u) => u.id === resolvedTrainerId);
+    const resolvedTrainerName =
+      studentData.trainerName ||
+      trainerAccount?.fullName ||
+      (currentUser?.role === 'trainer' || currentUser?.role === 'admin'
+        ? currentUser.fullName
+        : '');
+
     const newStudent: StudentProfile = {
       fullName: studentData.fullName.trim(),
       gender: studentData.gender,
@@ -686,149 +451,99 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       healthGoal:
         studentData.healthGoal?.trim() || 'Cân đối vóc dáng & Cải thiện sức khỏe toàn diện',
       targetMetrics: studentData.targetMetrics || {},
-      avatarUrl:
-        studentData.avatarUrl ||
-        'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
+      avatarUrl: studentData.avatarUrl || '',
+      trainerId: resolvedTrainerId,
+      trainerName: resolvedTrainerName,
       id: `student-${Date.now()}`,
       createdAt: new Date().toISOString().split('T')[0],
     };
 
-    let updatedList: StudentProfile[] = [];
-    setStudents((prev) => {
-      updatedList = [newStudent, ...prev.filter((s) => s.id !== newStudent.id)];
-      localStorage.setItem('fit_students', JSON.stringify(updatedList));
-      return updatedList;
+    const res = await fetch('/api/students', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-auth-username': currentUser?.username || 'admin',
+      },
+      body: JSON.stringify({
+        ...newStudent,
+        initialUsername: studentData.initialUsername || studentData.phone,
+        initialPassword: studentData.initialPassword || '123',
+      }),
     });
+
+    if (res.ok) {
+      const saved = await res.json();
+      setAllStudents((prev) => [saved, ...prev.filter((s) => s.id !== saved.id)]);
+      setSelectedStudent(saved);
+      await fetchUsersList();
+      return saved;
+    }
+
+    setAllStudents((prev) => [newStudent, ...prev]);
     setSelectedStudent(newStudent);
-
-    // Persist student login credentials locally
-    try {
-      const customAccounts = JSON.parse(localStorage.getItem('fit_custom_users') || '[]');
-      const usernameToSave = (
-        studentData.initialUsername ||
-        studentData.phone ||
-        newStudent.id
-      ).trim();
-      const passwordToSave = (studentData.initialPassword || '123').trim();
-      const filteredAccounts = customAccounts.filter(
-        (u: any) => u.username?.toLowerCase() !== usernameToSave.toLowerCase()
-      );
-      filteredAccounts.push({
-        username: usernameToSave,
-        password: passwordToSave,
-        fullName: newStudent.fullName,
-        studentId: newStudent.id,
-        avatarUrl: newStudent.avatarUrl,
-      });
-      localStorage.setItem('fit_custom_users', JSON.stringify(filteredAccounts));
-    } catch {
-      // Ignore storage error
-    }
-
-    // Sync to Google Drive Cloud DB if connected
-    syncSnapshotToDrive({ students: updatedList });
-
-    if (!isGitHubPages) {
-      try {
-        const res = await fetch('/api/students', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-auth-username': currentUser?.username || 'trunghbl',
-          },
-          body: JSON.stringify({
-            ...newStudent,
-            _requestedBy: currentUser?.username || 'trunghbl',
-            initialUsername: studentData.initialUsername || studentData.phone,
-            initialPassword: studentData.initialPassword || '123',
-          }),
-        });
-        if (res.ok) {
-          setApiAvailable(true);
-        }
-      } catch (err) {
-        console.warn('Could not save student to remote DB (persisted in local & cloud storage)', err);
-      }
-    }
     return newStudent;
   };
 
-  // Update Student
+  // Update Student -> Updates PostgreSQL database and recalculates AI calorie advice
   const updateStudent = async (student: StudentProfile) => {
-    let updatedList: StudentProfile[] = [];
-    setStudents((prev) => {
-      updatedList = prev.map((s) => (s.id === student.id ? student : s));
-      localStorage.setItem('fit_students', JSON.stringify(updatedList));
-      return updatedList;
-    });
+    setAllStudents((prev) => prev.map((s) => (s.id === student.id ? student : s)));
     if (selectedStudent?.id === student.id) {
       setSelectedStudent(student);
     }
 
-    syncSnapshotToDrive({ students: updatedList });
+    await fetch(`/api/students/${student.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(student),
+    }).catch((err) => console.warn('Could not update student on DB', err));
 
-    if (apiAvailable && !isGitHubPages) {
-      try {
-        await fetch(`/api/students/${student.id}`, {
+    // Recalculate AI advice for latest measurement when target weight / duration changes
+    const studentHistory = getStudentMetrics(student.id);
+    const latestRecord = studentHistory[studentHistory.length - 1];
+    const previousRecord =
+      studentHistory.length > 1 ? studentHistory[studentHistory.length - 2] : undefined;
+
+    if (latestRecord) {
+      const updatedContent = generateInstantAIAdvice(student, latestRecord, previousRecord);
+      const existingAdvice = advices.find((a) => a.studentId === student.id);
+      if (existingAdvice) {
+        const updatedAdvice: AIAdviceRecord = {
+          ...existingAdvice,
+          aiDraftContent: updatedContent,
+          trainerEditedContent: updatedContent.summary,
+        };
+        setAdvices((prev) => prev.map((a) => (a.id === existingAdvice.id ? updatedAdvice : a)));
+        await fetch(`/api/advices/${existingAdvice.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(student),
-        });
-      } catch (err) {
-        console.warn('Could not update student on remote DB', err);
-      }
-    }
-  };
-
-  const updateStudentDriveFolder = async (studentId: string, driveFolderUrl: string) => {
-    let updatedList: StudentProfile[] = [];
-    setStudents((prev) => {
-      updatedList = prev.map((s) => (s.id === studentId ? { ...s, driveFolderUrl } : s));
-      localStorage.setItem('fit_students', JSON.stringify(updatedList));
-      return updatedList;
-    });
-    if (selectedStudent?.id === studentId) {
-      setSelectedStudent((prev) => (prev ? { ...prev, driveFolderUrl } : null));
-    }
-
-    if (apiAvailable && !isGitHubPages) {
-      try {
-        await fetch(`/api/students/${studentId}/drive-folder`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ driveFolderUrl }),
-        });
-      } catch (err) {
-        console.warn('Could not update student drive folder URL', err);
+          body: JSON.stringify(updatedAdvice),
+        }).catch(() => null);
       }
     }
   };
 
   // Delete Student
   const deleteStudent = async (id: string) => {
-    addDeletedId('fit_deleted_students', id);
-    let updatedList: StudentProfile[] = [];
-    setStudents((prev) => {
-      updatedList = prev.filter((s) => s.id !== id);
-      localStorage.setItem('fit_students', JSON.stringify(updatedList));
+    setAllStudents((prev) => {
+      const updatedList = prev.filter((s) => s.id !== id);
+      if (selectedStudent?.id === id) {
+        setSelectedStudent(updatedList[0] || null);
+      }
       return updatedList;
     });
-    if (selectedStudent?.id === id) {
-      setSelectedStudent(updatedList[0] || null);
-    }
+    setMetrics((prev) => prev.filter((m) => m.studentId !== id));
+    setAdvices((prev) => prev.filter((a) => a.studentId !== id));
+    setMeals((prev) => prev.filter((m) => m.studentId !== id));
+    setWorkouts((prev) => prev.filter((w) => w.studentId !== id));
+    setPhotos((prev) => prev.filter((p) => p.studentId !== id));
+    setUsers((prev) => prev.filter((u) => u.studentId !== id));
 
-    syncSnapshotToDrive({ students: updatedList });
-
-    if (apiAvailable && !isGitHubPages) {
-      try {
-        await fetch(`/api/students/${id}`, { method: 'DELETE' });
-      } catch (err) {
-        console.warn('Could not delete student on remote DB', err);
-      }
-    }
+    await fetch(`/api/students/${id}`, { method: 'DELETE' }).catch((err) =>
+      console.warn('Could not delete student on DB', err)
+    );
   };
 
-  // Add Metric Record (10 indicators) + INSTANT AI ADVICE
+  // Add Metric Record + Instant AI Advice saved to PostgreSQL
   const addMetricRecord = async (recordData: Omit<HealthMetricRecord, 'id' | 'timestamp'>) => {
     const timestamp = new Date(recordData.date).getTime() || Date.now();
     const newRecord: HealthMetricRecord = {
@@ -840,27 +555,15 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const studentHistory = getStudentMetrics(recordData.studentId);
     const previousRecord = studentHistory[studentHistory.length - 1];
 
-    let updatedMetrics: HealthMetricRecord[] = [];
-    setMetrics((prev) => {
-      updatedMetrics = [...prev, newRecord].sort((a, b) => a.timestamp - b.timestamp);
-      localStorage.setItem('fit_metrics', JSON.stringify(updatedMetrics));
-      return updatedMetrics;
-    });
+    setMetrics((prev) => [...prev, newRecord].sort((a, b) => a.timestamp - b.timestamp));
 
-    if (apiAvailable && !isGitHubPages) {
-      try {
-        await fetch('/api/metrics', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newRecord),
-        });
-      } catch (err) {
-        console.warn('Could not save metric to remote DB', err);
-      }
-    }
+    await fetch('/api/metrics', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newRecord),
+    }).catch((err) => console.warn('Could not save metric to DB', err));
 
-    // Auto-generate INSTANT AI Advice
-    const targetStudent = students.find((s) => s.id === recordData.studentId);
+    const targetStudent = allStudents.find((s) => s.id === recordData.studentId);
     if (targetStudent) {
       const adviceContent = generateInstantAIAdvice(targetStudent, newRecord, previousRecord);
       const newAdvice: AIAdviceRecord = {
@@ -874,28 +577,42 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         approvedAt: new Date().toLocaleString('vi-VN'),
       };
 
-      let updatedAdvices: AIAdviceRecord[] = [];
-      setAdvices((prev) => {
-        updatedAdvices = [newAdvice, ...prev];
-        localStorage.setItem('fit_advices', JSON.stringify(updatedAdvices));
-        return updatedAdvices;
-      });
+      setAdvices((prev) => [newAdvice, ...prev]);
 
-      syncSnapshotToDrive({ metrics: updatedMetrics, advices: updatedAdvices });
+      await fetch('/api/advices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newAdvice),
+      }).catch((err) => console.warn('Could not save advice to DB', err));
 
-      if (apiAvailable && !isGitHubPages) {
-        try {
-          await fetch('/api/advices', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(newAdvice),
-          });
-        } catch (err) {
-          console.warn('Could not save advice to remote DB', err);
-        }
-      }
+      // Request Gemini AI 3-part health analysis and update DB record
+      fetch('/api/ai/analyze-health', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          student: targetStudent,
+          metric: newRecord,
+          previousMetric: previousRecord,
+        }),
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((aiData) => {
+          if (aiData && aiData.success && aiData.analysis) {
+            const enrichedAdvice: AIAdviceRecord = {
+              ...newAdvice,
+              aiDraftContent: aiData.analysis,
+              trainerEditedContent: aiData.analysis.summary,
+            };
+            setAdvices((prev) => prev.map((a) => (a.id === newAdvice.id ? enrichedAdvice : a)));
+            fetch(`/api/advices/${newAdvice.id}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(enrichedAdvice),
+            }).catch(() => null);
+          }
+        })
+        .catch(() => null);
 
-      // Check anomalies & create smart notifications
       const anomalies = detectAnomalies(targetStudent, newRecord, [...studentHistory, newRecord]);
       for (const anomaly of anomalies) {
         const notif: SmartNotification = {
@@ -910,149 +627,128 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         };
         setNotifications((prev) => [notif, ...prev]);
       }
-    } else {
-      syncSnapshotToDrive({ metrics: updatedMetrics });
     }
   };
 
   // Delete Metric Record
   const deleteMetricRecord = async (id: string) => {
-    addDeletedId('fit_deleted_metrics', id);
-    let updatedMetrics: HealthMetricRecord[] = [];
-    setMetrics((prev) => {
-      updatedMetrics = prev.filter((m) => m.id !== id);
-      localStorage.setItem('fit_metrics', JSON.stringify(updatedMetrics));
-      return updatedMetrics;
-    });
+    setMetrics((prev) => prev.filter((m) => m.id !== id));
+    setAdvices((prev) => prev.filter((a) => a.metricRecordId !== id));
 
-    syncSnapshotToDrive({ metrics: updatedMetrics });
-
-    if (apiAvailable && !isGitHubPages) {
-      try {
-        await fetch(`/api/metrics/${id}`, { method: 'DELETE' });
-      } catch (err) {
-        console.warn('Could not delete metric from remote DB', err);
-      }
-    }
+    await fetch(`/api/metrics/${id}`, { method: 'DELETE' }).catch((err) =>
+      console.warn('Could not delete metric from DB', err)
+    );
   };
 
   // Add Meal Log
   const addMealLog = async (mealData: Omit<MealLog, 'id' | 'loggedAt'>) => {
-    const rawImg = mealData.imageUrl || '';
-    const lightweightUrl = rawImg.startsWith('data:')
-      ? 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80'
-      : rawImg || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80';
-
     const newMeal: MealLog = {
       ...mealData,
-      imageUrl: lightweightUrl,
+      imageUrl: mealData.imageUrl || '',
       id: `meal-${Date.now()}`,
       loggedAt: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
     };
 
-    let updatedMeals: MealLog[] = [];
-    setMeals((prev) => {
-      updatedMeals = [newMeal, ...prev];
-      localStorage.setItem('fit_meals', JSON.stringify(updatedMeals));
-      return updatedMeals;
-    });
+    setMeals((prev) => [newMeal, ...prev]);
 
-    syncSnapshotToDrive({ meals: updatedMeals });
-
-    if (apiAvailable && !isGitHubPages) {
-      try {
-        await fetch('/api/meals', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newMeal),
-        });
-      } catch (err) {
-        console.warn('Could not save meal to remote DB', err);
-      }
-    }
+    await fetch('/api/meals', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newMeal),
+    }).catch((err) => console.warn('Could not save meal to DB', err));
   };
 
   // Add Meal Trainer Feedback
-  const addMealFeedback = async (id: string, reaction: '🔥' | '💪' | '👏' | '❤️', comment?: string) => {
-    let updatedMeals: MealLog[] = [];
-    setMeals((prev) => {
-      updatedMeals = prev.map((m) =>
+  const addMealFeedback = async (
+    id: string,
+    reaction: '🔥' | '💪' | '👏' | '❤️',
+    comment?: string
+  ) => {
+    setMeals((prev) =>
+      prev.map((m) =>
         m.id === id ? { ...m, trainerReaction: reaction, trainerComment: comment } : m
-      );
-      localStorage.setItem('fit_meals', JSON.stringify(updatedMeals));
-      return updatedMeals;
-    });
+      )
+    );
 
-    syncSnapshotToDrive({ meals: updatedMeals });
-
-    if (apiAvailable && !isGitHubPages) {
-      try {
-        await fetch(`/api/meals/${id}/feedback`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reaction, comment }),
-        });
-      } catch (err) {
-        console.warn('Could not save meal feedback', err);
-      }
-    }
+    await fetch(`/api/meals/${id}/feedback`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reaction, comment }),
+    }).catch((err) => console.warn('Could not save meal feedback', err));
   };
 
-  // AI Meal Photo Recognition Service (Server Gemini API + Real Client Computer Vision Pixel Analyzer)
-  const analyzeMealPhoto = async (params: {
-    imageBase64: string;
-    mimeType?: string;
-    studentGoal?: string;
-    mealType?: string;
-    studentName?: string;
-    dishHint?: string;
-    fileName?: string;
+  // Upsert a 30-day meal ticket slot (Day 1..30, Morning & Afternoon portions)
+  const upsertMealTicket = async (params: {
+    studentId: string;
+    dayNumber: number;
+    date: string;
+    morningStatus: PortionStatus;
+    afternoonStatus: PortionStatus;
+    note?: string;
+    attendanceStatus?: 'ate' | 'takeaway' | 'weighed_no_meal';
   }) => {
-    const visualAnalysisPromise = analyzeFoodImageVisuals(params.imageBase64, {
-      mealType: params.mealType,
-      studentGoal: params.studentGoal,
-      fileName: params.fileName,
-    });
+    const ticketId = `ticket-${params.studentId}-d${params.dayNumber}`;
+    const trimmedNote = (params.note || '').trim();
+    const isEmptySlot =
+      params.morningStatus === 'none' &&
+      params.afternoonStatus === 'none' &&
+      !trimmedNote &&
+      !params.attendanceStatus;
 
-    if (!apiAvailable || isGitHubPages) {
-      return await visualAnalysisPromise;
+    if (isEmptySlot) {
+      setMeals((prev) => prev.filter((m) => m.id !== ticketId));
+      await fetch(`/api/meals/${ticketId}`, { method: 'DELETE' }).catch((err) =>
+        console.warn('Could not delete empty meal ticket slot', err)
+      );
+      return;
     }
 
-    try {
-      const res = await fetch('/api/ai/analyze-meal', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(params),
-      });
-
-      if (res.status === 404 || res.status === 405) {
-        setApiAvailable(false);
-        return await visualAnalysisPromise;
-      }
-
-      const rawText = await res.text();
-      let data: any = null;
-      try {
-        data = JSON.parse(rawText);
-      } catch {
-        return await visualAnalysisPromise;
-      }
-
-      if (res.ok && data?.analysis && data.analysis.analysisSource === 'gemini-ai') {
-        return data.analysis;
-      }
-
-      const canvasResult = await visualAnalysisPromise;
-      if (data?.geminiErrorHint) {
-        return {
-          ...canvasResult,
-          geminiErrorHint: data.geminiErrorHint,
-        };
-      }
-      return canvasResult;
-    } catch {
-      return await visualAnalysisPromise;
+    const statusSummaryParts: string[] = [];
+    if (params.morningStatus === 'used') statusSummaryParts.push('Sáng: Đã dùng');
+    else if (params.morningStatus === 'takeaway') statusSummaryParts.push('Sáng: Mang về');
+    if (params.afternoonStatus === 'used') statusSummaryParts.push('Chiều: Đã dùng');
+    else if (params.afternoonStatus === 'takeaway') statusSummaryParts.push('Chiều: Mang về');
+    if (statusSummaryParts.length === 0 && params.attendanceStatus === 'weighed_no_meal') {
+      statusSummaryParts.push('Cân chỉ số - Không dùng bữa');
     }
+
+    const newTicket: MealLog = {
+      id: ticketId,
+      studentId: params.studentId,
+      date: params.date || new Date().toISOString().split('T')[0],
+      mealType: 'Phiếu ăn 30 ngày',
+      imageUrl: '',
+      foodDescription:
+        trimmedNote || statusSummaryParts.join(' • ') || `Ngày ${params.dayNumber}/30`,
+      estimatedCalories: 0,
+      macros: {
+        protein: 0,
+        carbs: 0,
+        fat: 0,
+        dayNumber: params.dayNumber,
+        morningStatus: params.morningStatus,
+        afternoonStatus: params.afternoonStatus,
+        attendanceStatus: params.attendanceStatus,
+      },
+      trainerComment: trimmedNote || undefined,
+      loggedAt: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    setMeals((prev) => [newTicket, ...prev.filter((m) => m.id !== ticketId)]);
+
+    await fetch('/api/meals', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newTicket),
+    }).catch((err) => console.warn('Could not save meal ticket to DB', err));
+  };
+
+  // Reset all 30-day meal tickets for a student (start a new 30-day card cycle)
+  const resetStudentMealTickets = async (studentId: string) => {
+    setMeals((prev) => prev.filter((m) => m.studentId !== studentId));
+    await fetch(`/api/meals/student/${studentId}`, { method: 'DELETE' }).catch((err) =>
+      console.warn('Could not reset student meal tickets', err)
+    );
   };
 
   // Add Workout Log
@@ -1063,26 +759,13 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       loggedAt: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
     };
 
-    let updatedWorkouts: WorkoutLog[] = [];
-    setWorkouts((prev) => {
-      updatedWorkouts = [newWorkout, ...prev];
-      localStorage.setItem('fit_workouts', JSON.stringify(updatedWorkouts));
-      return updatedWorkouts;
-    });
+    setWorkouts((prev) => [newWorkout, ...prev]);
 
-    syncSnapshotToDrive({ workouts: updatedWorkouts });
-
-    if (apiAvailable && !isGitHubPages) {
-      try {
-        await fetch('/api/workouts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newWorkout),
-        });
-      } catch (err) {
-        console.warn('Could not save workout to remote DB', err);
-      }
-    }
+    await fetch('/api/workouts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newWorkout),
+    }).catch((err) => console.warn('Could not save workout to DB', err));
   };
 
   // Add Workout Feedback
@@ -1091,28 +774,17 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     reaction: '🔥' | '💪' | '👏' | '❤️',
     comment?: string
   ) => {
-    let updatedWorkouts: WorkoutLog[] = [];
-    setWorkouts((prev) => {
-      updatedWorkouts = prev.map((w) =>
+    setWorkouts((prev) =>
+      prev.map((w) =>
         w.id === id ? { ...w, trainerReaction: reaction, trainerComment: comment } : w
-      );
-      localStorage.setItem('fit_workouts', JSON.stringify(updatedWorkouts));
-      return updatedWorkouts;
-    });
+      )
+    );
 
-    syncSnapshotToDrive({ workouts: updatedWorkouts });
-
-    if (apiAvailable && !isGitHubPages) {
-      try {
-        await fetch(`/api/workouts/${id}/feedback`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reaction, comment }),
-        });
-      } catch (err) {
-        console.warn('Could not save workout feedback', err);
-      }
-    }
+    await fetch(`/api/workouts/${id}/feedback`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reaction, comment }),
+    }).catch((err) => console.warn('Could not save workout feedback', err));
   };
 
   // Add Physique Photo
@@ -1121,43 +793,22 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       ...photoData,
       id: `photo-${Date.now()}`,
     };
-    let updatedPhotos: PhysiquePhoto[] = [];
-    setPhotos((prev) => {
-      updatedPhotos = [...prev, newPhoto];
-      localStorage.setItem('fit_photos', JSON.stringify(updatedPhotos));
-      return updatedPhotos;
-    });
+    setPhotos((prev) => [...prev, newPhoto]);
 
-    syncSnapshotToDrive({ photos: updatedPhotos });
-
-    if (apiAvailable && !isGitHubPages) {
-      try {
-        await fetch('/api/photos', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newPhoto),
-        });
-      } catch (err) {
-        console.warn('Could not save photo to remote DB', err);
-      }
-    }
+    await fetch('/api/photos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newPhoto),
+    }).catch((err) => console.warn('Could not save photo to DB', err));
   };
 
   // Mark notification read
   const markNotificationRead = async (id: string) => {
-    setNotifications((prev) => {
-      const updated = prev.map((n) => (n.id === id ? { ...n, read: true } : n));
-      localStorage.setItem('fit_notifications', JSON.stringify(updated));
-      return updated;
-    });
+    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
 
-    if (apiAvailable && !isGitHubPages) {
-      try {
-        await fetch(`/api/notifications/${id}/read`, { method: 'PUT' });
-      } catch (err) {
-        console.warn('Could not mark notification read', err);
-      }
-    }
+    await fetch(`/api/notifications/${id}/read`, { method: 'PUT' }).catch((err) =>
+      console.warn('Could not mark notification read', err)
+    );
   };
 
   return (
@@ -1166,11 +817,19 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         currentUser,
         login,
         logout,
+        isAdmin,
         isTrainer,
         canCreateStudent,
+        users,
+        trainers,
+        createUserAccount,
+        updateUserAccount,
+        deleteUserAccount,
+        assignStudentToTrainer,
         role,
         setRole,
         students,
+        allStudents,
         selectedStudent,
         setSelectedStudent,
         metrics,
@@ -1189,13 +848,13 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         dbStatus,
         addStudent,
         updateStudent,
-        updateStudentDriveFolder,
         deleteStudent,
         addMetricRecord,
         deleteMetricRecord,
         addMealLog,
+        upsertMealTicket,
+        resetStudentMealTickets,
         addMealFeedback,
-        analyzeMealPhoto,
         addWorkoutLog,
         addWorkoutFeedback,
         addPhysiquePhoto,

@@ -106,13 +106,12 @@ export const AddMetricModal: React.FC<AddMetricModalProps> = ({
     const visc = parseInt(visceralFat, 10);
     if (isNaN(visc) || visc < 1 || visc > 30) newErrors.visceralFat = 'Mỡ nội tạng từ cấp 1 đến 30';
 
-    const wst = parseFloat(waist);
-    if (isNaN(wst) || wst < 30 || wst > 200) newErrors.waist = 'Vòng eo từ 30.0 đến 200.0 cm';
-
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
       return;
     }
+
+    const wst = parseFloat(waist) || (latestMetric ? latestMetric.waist : 80.0);
 
     await addMetricRecord({
       studentId: student.id,
@@ -134,53 +133,55 @@ export const AddMetricModal: React.FC<AddMetricModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full p-6 my-8 animate-in fade-in zoom-in-95 duration-150 border border-slate-100">
+    <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full min-w-0 p-4 sm:p-6 my-2 sm:my-8 max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] overflow-y-auto overflow-x-hidden animate-in fade-in zoom-in-95 duration-150 border border-slate-100">
         {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-          <div className="flex items-center space-x-2.5">
-            <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
+        <div className="flex items-start sm:items-center justify-between gap-2 pb-3 sm:pb-4 border-b border-slate-100">
+          <div className="flex items-center space-x-2.5 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
               <Scale className="w-5 h-5" />
             </div>
-            <div>
-              <h3 className="font-bold text-slate-900 text-base">
+            <div className="min-w-0">
+              <h3 className="font-bold text-slate-900 text-sm sm:text-base break-words">
                 Nhập Nhật Ký 10 Chỉ Số Sinh Học
               </h3>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-500 break-words">
                 Học viên: <span className="font-semibold text-slate-800">{student.fullName}</span> ({student.age} tuổi)
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100"
+            className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 shrink-0"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Live Score Preview & Instant Anomaly Warning Banner */}
-        <div className="mt-4 p-3 rounded-xl bg-emerald-50/70 border border-emerald-200/80 flex items-center justify-between text-xs">
-          <div className="flex items-center space-x-2">
-            <Sparkles className="w-4 h-4 text-emerald-600" />
+        <div className="mt-4 p-3 rounded-xl bg-emerald-50/70 border border-emerald-200/80 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+            <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
             <span className="font-semibold text-emerald-900">Điểm Sức Khỏe Dự Kiến:</span>
-            <span className="text-sm font-extrabold text-emerald-700 bg-white px-2 py-0.5 rounded-md border border-emerald-300">
+            <span className="text-xs sm:text-sm font-extrabold text-emerald-700 bg-white px-2 py-0.5 rounded-md border border-emerald-300">
               {scorePreview.totalScore} / 100 ({scorePreview.tier})
             </span>
           </div>
 
-          {tempMetric.visceralFat >= 10 && (
-            <span className="inline-flex items-center text-rose-700 font-bold bg-rose-100 px-2 py-0.5 rounded border border-rose-300">
-              <AlertTriangle className="w-3.5 h-3.5 mr-1" />
-              Mỡ nội tạng ≥ 10
-            </span>
-          )}
-          {tempMetric.biologicalAge - student.age >= 3 && (
-            <span className="inline-flex items-center text-amber-800 font-bold bg-amber-100 px-2 py-0.5 rounded border border-amber-300">
-              <AlertTriangle className="w-3.5 h-3.5 mr-1" />
-              Lão hóa +{tempMetric.biologicalAge - student.age} tuổi
-            </span>
-          )}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {tempMetric.visceralFat >= 10 && (
+              <span className="inline-flex items-center text-rose-700 font-bold bg-rose-100 px-2 py-0.5 rounded border border-rose-300">
+                <AlertTriangle className="w-3.5 h-3.5 mr-1 shrink-0" />
+                Mỡ nội tạng ≥ 10
+              </span>
+            )}
+            {tempMetric.biologicalAge - student.age >= 3 && (
+              <span className="inline-flex items-center text-amber-800 font-bold bg-amber-100 px-2 py-0.5 rounded border border-amber-300">
+                <AlertTriangle className="w-3.5 h-3.5 mr-1 shrink-0" />
+                Lão hóa +{tempMetric.biologicalAge - student.age} tuổi
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Form Body */}
@@ -297,31 +298,10 @@ export const AddMetricModal: React.FC<AddMetricModalProps> = ({
               )}
             </div>
 
-            {/* 6. Thể hình */}
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">
-                6. Phân loại Thể hình *
-              </label>
-              <select
-                value={bodyType}
-                onChange={(e: any) => setBodyType(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-hidden font-semibold"
-              >
-                <option value="Tiêu chuẩn">Tiêu chuẩn</option>
-                <option value="Cơ bắp gọn">Cơ bắp gọn</option>
-                <option value="Vận động viên">Vận động viên</option>
-                <option value="Gầy">Gầy</option>
-                <option value="Thiếu cân nhẹ">Thiếu cân nhẹ</option>
-                <option value="Mỡ tiềm ẩn">Mỡ tiềm ẩn</option>
-                <option value="Thừa cân">Thừa cân</option>
-                <option value="Béo phì">Béo phì</option>
-              </select>
-            </div>
-
             {/* 7. BMR */}
             <div>
               <label className="block font-semibold text-slate-700 mb-1">
-                7. Năng lượng nghỉ ngơi BMR (Kcal) * <span className="text-slate-400 font-normal">[500 - 5000]</span>
+                6. Năng lượng nghỉ ngơi BMR (Kcal) * <span className="text-slate-400 font-normal">[500 - 5000]</span>
               </label>
               <input
                 type="number"
@@ -338,7 +318,7 @@ export const AddMetricModal: React.FC<AddMetricModalProps> = ({
             {/* 8. Tuổi sinh học */}
             <div>
               <label className="block font-semibold text-slate-700 mb-1">
-                8. Tuổi sinh học (Tuổi) * <span className="text-slate-400 font-normal">[1 - 120]</span>
+                7. Tuổi sinh học (Tuổi) * <span className="text-slate-400 font-normal">[1 - 120]</span>
               </label>
               <input
                 type="number"
@@ -357,7 +337,7 @@ export const AddMetricModal: React.FC<AddMetricModalProps> = ({
             {/* 9. Mỡ nội tạng */}
             <div>
               <label className="block font-semibold text-slate-700 mb-1">
-                9. Mỡ nội tạng (Cấp) * <span className="text-slate-400 font-normal">[Cấp 1 - 30]</span>
+                8. Mỡ nội tạng (Cấp) * <span className="text-slate-400 font-normal">[Cấp 1 - 30]</span>
               </label>
               <input
                 type="number"
@@ -371,24 +351,6 @@ export const AddMetricModal: React.FC<AddMetricModalProps> = ({
               {errors.visceralFat && (
                 <p className="text-rose-500 text-[10px] mt-0.5">{errors.visceralFat}</p>
               )}
-            </div>
-
-            {/* 10. Vòng eo */}
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">
-                10. Vòng eo (cm) * <span className="text-slate-400 font-normal">[30.0 - 200.0]</span>
-              </label>
-              <input
-                type="number"
-                step="0.1"
-                required
-                value={waist}
-                onChange={(e) => setWaist(e.target.value)}
-                className={`w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-emerald-500 outline-hidden font-medium ${
-                  errors.waist ? 'border-rose-400 bg-rose-50' : 'border-slate-200'
-                }`}
-              />
-              {errors.waist && <p className="text-rose-500 text-[10px] mt-0.5">{errors.waist}</p>}
             </div>
           </div>
 
@@ -407,22 +369,22 @@ export const AddMetricModal: React.FC<AddMetricModalProps> = ({
           </div>
 
           {/* Actions */}
-          <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
-            <span className="text-[11px] text-slate-400 flex items-center">
-              <Info className="w-3.5 h-3.5 mr-1" />
-              Tự động lưu vào Aiven PostgreSQL & tạo dự thảo Lời khuyên AI
+          <div className="pt-3 border-t border-slate-100 flex flex-col-reverse sm:flex-row sm:items-center justify-between gap-3">
+            <span className="text-[11px] text-slate-400 flex items-start sm:items-center min-w-0">
+              <Info className="w-3.5 h-3.5 mr-1 shrink-0 mt-0.5 sm:mt-0" />
+              <span>Tự động lưu vào hệ thống & tạo dự thảo Lời khuyên AI</span>
             </span>
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center justify-end gap-2 w-full sm:w-auto shrink-0">
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 border border-slate-200 rounded-xl font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
+                className="flex-1 sm:flex-initial px-4 py-2 border border-slate-200 rounded-xl font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
               >
                 Hủy
               </button>
               <button
                 type="submit"
-                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-semibold transition-colors shadow-xs"
+                className="flex-1 sm:flex-initial px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-semibold transition-colors shadow-xs whitespace-nowrap"
               >
                 Lưu Nhật Ký Đo
               </button>

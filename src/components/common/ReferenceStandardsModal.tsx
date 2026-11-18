@@ -39,7 +39,7 @@ export const ReferenceStandardsModal: React.FC = () => {
             <BookOpen className="w-5 h-5 text-emerald-400" />
             <div>
               <h3 className="font-extrabold text-sm sm:text-base">
-                Bảng Chuẩn Đối Soát Y Tế & Thể Thao
+                Bảng Chỉ Số Cơ Thể
               </h3>
               <p className="text-[11px] text-slate-400">
                 Tài liệu tiêu chuẩn cân đo sinh học được chuẩn hóa theo thực tế phòng khám & trung tâm
