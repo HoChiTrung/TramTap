@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
 import {
   StudentProfile,
   HealthMetricRecord,
@@ -76,7 +76,10 @@ interface HealthContextType {
   badges: Badge[];
   notifications: SmartNotification[];
   unreadNotificationCount: number;
-  dbStatus: { connected: boolean; name: string };
+  dbStatus: { connected: boolean; name: string; host?: string; error?: string };
+  dbError: string | null;
+  clearDbError: () => void;
+  refreshDatabase: () => Promise<void>;
 
   // Operations
   addStudent: (
@@ -115,28 +118,28 @@ interface HealthContextType {
 
 const HealthContext = createContext<HealthContextType | undefined>(undefined);
 
-// One-time cleanup of any legacy sample data cached in browser localStorage
+const DEFAULT_DB_DISCONNECTED_MSG =
+  'Không thể kết nối đến Cơ sở dữ liệu PostgreSQL (Aiven Cloud). Hệ thống KHÔNG lưu vào bộ nhớ tạm của trình duyệt để tránh mất dữ liệu. Vui lòng kiểm tra lại kết nối Database!';
+
+// Cleanup any legacy cached data in browser localStorage so the app never uses temporary browser data
 function purgeLegacySampleCache() {
   try {
-    if (localStorage.getItem('fit_db_clean_v2') !== 'true') {
-      const keysToRemove = [
-        'fit_students',
-        'fit_selected_student_id',
-        'fit_metrics',
-        'fit_advices',
-        'fit_meals',
-        'fit_workouts',
-        'fit_photos',
-        'fit_badges',
-        'fit_notifications',
-        'fit_custom_users',
-        'fit_deleted_students',
-        'fit_deleted_metrics',
-      ];
-      for (const k of keysToRemove) {
-        localStorage.removeItem(k);
-      }
-      localStorage.setItem('fit_db_clean_v2', 'true');
+    const keysToRemove = [
+      'fit_students',
+      'fit_selected_student_id',
+      'fit_metrics',
+      'fit_advices',
+      'fit_meals',
+      'fit_workouts',
+      'fit_photos',
+      'fit_badges',
+      'fit_notifications',
+      'fit_custom_users',
+      'fit_deleted_students',
+      'fit_deleted_metrics',
+    ];
+    for (const k of keysToRemove) {
+      localStorage.removeItem(k);
     }
   } catch {
     // Ignore storage error
@@ -167,10 +170,21 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [badges] = useState<Badge[]>([]);
   const [notifications, setNotifications] = useState<SmartNotification[]>([]);
 
-  const [dbStatus, setDbStatus] = useState<{ connected: boolean; name: string }>({
+  const [dbStatus, setDbStatus] = useState<{
+    connected: boolean;
+    name: string;
+    host?: string;
+    error?: string;
+  }>({
     connected: true,
-    name: 'Aiven TramTap (PostgreSQL)',
+    name: 'defaultdb (PostgreSQL)',
+    host: 'pg-1d2d7843-chitrung7542-3ac1.e.aivencloud.com',
   });
+  const [dbError, setDbError] = useState<string | null>(null);
+
+  const clearDbError = useCallback(() => {
+    setDbError(null);
+  }, []);
 
   const [openReportModal, setOpenReportModal] = useState(false);
   const [openStandardsModal, setOpenStandardsModal] = useState(false);
@@ -218,7 +232,35 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, [currentUser, allStudents, students, selectedStudent]);
 
-  const fetchUsersList = async () => {
+  const handleApiErrorResponse = async (res: Response, fallbackMsg: string): Promise<string> => {
+    let errText = fallbackMsg;
+    try {
+      const body = await res.json();
+      if (body && body.error) {
+        errText = body.error;
+      }
+      if (res.status === 503 || body?.dbDisconnected) {
+        setDbStatus((prev) => ({
+          ...prev,
+          connected: false,
+          error: errText,
+        }));
+      }
+    } catch {
+      if (res.status === 503) {
+        errText = DEFAULT_DB_DISCONNECTED_MSG;
+        setDbStatus((prev) => ({
+          ...prev,
+          connected: false,
+          error: errText,
+        }));
+      }
+    }
+    setDbError(errText);
+    return errText;
+  };
+
+  const fetchUsersList = useCallback(async () => {
     try {
       const res = await fetch('/api/users');
       if (res.ok) {
@@ -226,75 +268,108 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (Array.isArray(list)) {
           setUsers(list);
         }
+      } else {
+        await handleApiErrorResponse(res, DEFAULT_DB_DISCONNECTED_MSG);
       }
     } catch {
-      // Ignore
+      setDbStatus((prev) => ({
+        ...prev,
+        connected: false,
+        error: DEFAULT_DB_DISCONNECTED_MSG,
+      }));
+      setDbError(DEFAULT_DB_DISCONNECTED_MSG);
     }
-  };
-
-  // Load all data directly from PostgreSQL database API
-  useEffect(() => {
-    async function loadDataFromDatabase() {
-      try {
-        const healthCheck = await fetch('/api/health').catch(() => null);
-        if (healthCheck && healthCheck.ok) {
-          const healthData = await healthCheck.json().catch(() => null);
-          if (healthData) {
-            setDbStatus({
-              connected: healthData.databaseConnected ?? true,
-              name: `${healthData.databaseName || 'TramTap'} (PostgreSQL)`,
-            });
-          }
-        }
-
-        const [resU, resS, resM, resA, resMeals, resW, resP, resN] = await Promise.allSettled([
-          fetch('/api/users').then((r) => (r.ok ? r.json() : [])),
-          fetch('/api/students').then((r) => (r.ok ? r.json() : [])),
-          fetch('/api/metrics').then((r) => (r.ok ? r.json() : [])),
-          fetch('/api/advices').then((r) => (r.ok ? r.json() : [])),
-          fetch('/api/meals').then((r) => (r.ok ? r.json() : [])),
-          fetch('/api/workouts').then((r) => (r.ok ? r.json() : [])),
-          fetch('/api/photos').then((r) => (r.ok ? r.json() : [])),
-          fetch('/api/notifications').then((r) => (r.ok ? r.json() : [])),
-        ]);
-
-        if (resU.status === 'fulfilled' && Array.isArray(resU.value)) {
-          setUsers(resU.value);
-        }
-        if (resS.status === 'fulfilled' && Array.isArray(resS.value)) {
-          setAllStudents(resS.value);
-          setSelectedStudent((prev) => {
-            if (prev && resS.value.some((s: StudentProfile) => s.id === prev.id)) {
-              return prev;
-            }
-            return resS.value[0] || null;
-          });
-        }
-        if (resM.status === 'fulfilled' && Array.isArray(resM.value)) {
-          setMetrics(resM.value);
-        }
-        if (resA.status === 'fulfilled' && Array.isArray(resA.value)) {
-          setAdvices(resA.value);
-        }
-        if (resMeals.status === 'fulfilled' && Array.isArray(resMeals.value)) {
-          setMeals(resMeals.value);
-        }
-        if (resW.status === 'fulfilled' && Array.isArray(resW.value)) {
-          setWorkouts(resW.value);
-        }
-        if (resP.status === 'fulfilled' && Array.isArray(resP.value)) {
-          setPhotos(resP.value);
-        }
-        if (resN.status === 'fulfilled' && Array.isArray(resN.value)) {
-          setNotifications(resN.value);
-        }
-      } catch (err) {
-        console.warn('Database fetch error:', err);
-      }
-    }
-
-    loadDataFromDatabase();
   }, []);
+
+  // Load all data directly from PostgreSQL database API (Never from local storage)
+  const refreshDatabase = useCallback(async () => {
+    try {
+      const healthCheck = await fetch('/api/health').catch(() => null);
+      if (!healthCheck) {
+        setDbStatus({
+          connected: false,
+          name: 'defaultdb (PostgreSQL)',
+          host: 'pg-1d2d7843-chitrung7542-3ac1.e.aivencloud.com',
+          error: DEFAULT_DB_DISCONNECTED_MSG,
+        });
+        setDbError(DEFAULT_DB_DISCONNECTED_MSG);
+        return;
+      }
+
+      const healthData = await healthCheck.json().catch(() => null);
+      if (!healthCheck.ok || !healthData?.databaseConnected) {
+        const errMsg = healthData?.error || DEFAULT_DB_DISCONNECTED_MSG;
+        setDbStatus({
+          connected: false,
+          name: `${healthData?.databaseName || 'defaultdb'} (PostgreSQL)`,
+          host: healthData?.host || 'pg-1d2d7843-chitrung7542-3ac1.e.aivencloud.com',
+          error: errMsg,
+        });
+        setDbError(errMsg);
+        return;
+      }
+
+      setDbStatus({
+        connected: true,
+        name: `${healthData.databaseName || 'defaultdb'} (PostgreSQL)`,
+        host: healthData.host || 'pg-1d2d7843-chitrung7542-3ac1.e.aivencloud.com',
+      });
+      setDbError(null);
+
+      const [resU, resS, resM, resA, resMeals, resW, resP, resN] = await Promise.allSettled([
+        fetch('/api/users').then((r) => (r.ok ? r.json() : Promise.reject(r))),
+        fetch('/api/students').then((r) => (r.ok ? r.json() : Promise.reject(r))),
+        fetch('/api/metrics').then((r) => (r.ok ? r.json() : Promise.reject(r))),
+        fetch('/api/advices').then((r) => (r.ok ? r.json() : Promise.reject(r))),
+        fetch('/api/meals').then((r) => (r.ok ? r.json() : Promise.reject(r))),
+        fetch('/api/workouts').then((r) => (r.ok ? r.json() : Promise.reject(r))),
+        fetch('/api/photos').then((r) => (r.ok ? r.json() : Promise.reject(r))),
+        fetch('/api/notifications').then((r) => (r.ok ? r.json() : Promise.reject(r))),
+      ]);
+
+      if (resU.status === 'fulfilled' && Array.isArray(resU.value)) {
+        setUsers(resU.value);
+      }
+      if (resS.status === 'fulfilled' && Array.isArray(resS.value)) {
+        setAllStudents(resS.value);
+        setSelectedStudent((prev) => {
+          if (prev && resS.value.some((s: StudentProfile) => s.id === prev.id)) {
+            return prev;
+          }
+          return resS.value[0] || null;
+        });
+      }
+      if (resM.status === 'fulfilled' && Array.isArray(resM.value)) {
+        setMetrics(resM.value);
+      }
+      if (resA.status === 'fulfilled' && Array.isArray(resA.value)) {
+        setAdvices(resA.value);
+      }
+      if (resMeals.status === 'fulfilled' && Array.isArray(resMeals.value)) {
+        setMeals(resMeals.value);
+      }
+      if (resW.status === 'fulfilled' && Array.isArray(resW.value)) {
+        setWorkouts(resW.value);
+      }
+      if (resP.status === 'fulfilled' && Array.isArray(resP.value)) {
+        setPhotos(resP.value);
+      }
+      if (resN.status === 'fulfilled' && Array.isArray(resN.value)) {
+        setNotifications(resN.value);
+      }
+    } catch {
+      setDbStatus((prev) => ({
+        ...prev,
+        connected: false,
+        error: DEFAULT_DB_DISCONNECTED_MSG,
+      }));
+      setDbError(DEFAULT_DB_DISCONNECTED_MSG);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshDatabase();
+  }, [refreshDatabase]);
 
   // Login handler against PostgreSQL Database
   const login = async (username: string, pass: string) => {
@@ -304,13 +379,15 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password: pass }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.success && data.user) {
         setCurrentUser(data.user);
         setRole(data.user.role);
         localStorage.setItem('fit_auth_user', JSON.stringify(data.user));
+        setDbStatus((prev) => ({ ...prev, connected: true, error: undefined }));
+        setDbError(null);
 
-        await fetchUsersList();
+        await refreshDatabase();
 
         if (data.user.role === 'student' && data.user.studentId) {
           const found = allStudents.find((s) => s.id === data.user.studentId);
@@ -318,9 +395,21 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
         return { success: true };
       }
+      if (res.status === 503 || data.dbDisconnected) {
+        const msg = data.error || DEFAULT_DB_DISCONNECTED_MSG;
+        setDbStatus((prev) => ({ ...prev, connected: false, error: msg }));
+        setDbError(msg);
+        return { success: false, error: msg };
+      }
       return { success: false, error: data.error || 'Đăng nhập không thành công' };
     } catch {
-      return { success: false, error: 'Không thể kết nối máy chủ cơ sở dữ liệu!' };
+      setDbStatus((prev) => ({
+        ...prev,
+        connected: false,
+        error: DEFAULT_DB_DISCONNECTED_MSG,
+      }));
+      setDbError(DEFAULT_DB_DISCONNECTED_MSG);
+      return { success: false, error: DEFAULT_DB_DISCONNECTED_MSG };
     }
   };
 
@@ -334,7 +423,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const canCreateStudent =
     currentUser?.role === 'trainer' || currentUser?.role === 'admin';
 
-  // User Accounts CRUD in Database
+  // User Accounts CRUD in PostgreSQL Database (No local memory fallback)
   const createUserAccount: HealthContextType['createUserAccount'] = async (params) => {
     try {
       const res = await fetch('/api/users', {
@@ -342,14 +431,22 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
       });
-      const data = await res.json();
       if (!res.ok) {
-        return { success: false, error: data.error || 'Không thể tạo tài khoản' };
+        const errMsg = await handleApiErrorResponse(
+          res,
+          'Không thể lưu tài khoản vào Database!'
+        );
+        return { success: false, error: errMsg };
       }
+      const data = await res.json();
+      setDbStatus((prev) => ({ ...prev, connected: true, error: undefined }));
+      setDbError(null);
       await fetchUsersList();
       return { success: true, user: data };
     } catch {
-      return { success: false, error: 'Lỗi kết nối khi tạo tài khoản' };
+      setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
+      setDbError(DEFAULT_DB_DISCONNECTED_MSG);
+      return { success: false, error: DEFAULT_DB_DISCONNECTED_MSG };
     }
   };
 
@@ -360,28 +457,50 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
       });
-      const data = await res.json();
       if (!res.ok) {
-        return { success: false, error: data.error || 'Không thể cập nhật tài khoản' };
+        const errMsg = await handleApiErrorResponse(
+          res,
+          'Không thể cập nhật tài khoản vào Database!'
+        );
+        return { success: false, error: errMsg };
       }
+      setDbStatus((prev) => ({ ...prev, connected: true, error: undefined }));
+      setDbError(null);
       await fetchUsersList();
+      // If trainer name changed, refresh students to reflect new trainerName
+      if (params.fullName) {
+        const resS = await fetch('/api/students');
+        if (resS.ok) {
+          const sList = await resS.json();
+          if (Array.isArray(sList)) setAllStudents(sList);
+        }
+      }
       return { success: true };
     } catch {
-      return { success: false, error: 'Lỗi kết nối khi cập nhật tài khoản' };
+      setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
+      setDbError(DEFAULT_DB_DISCONNECTED_MSG);
+      return { success: false, error: DEFAULT_DB_DISCONNECTED_MSG };
     }
   };
 
   const deleteUserAccount: HealthContextType['deleteUserAccount'] = async (id) => {
     try {
       const res = await fetch(`/api/users/${id}`, { method: 'DELETE' });
-      const data = await res.json();
       if (!res.ok) {
-        return { success: false, error: data.error || 'Không thể xóa tài khoản' };
+        const errMsg = await handleApiErrorResponse(
+          res,
+          'Không thể xóa tài khoản trên Database!'
+        );
+        return { success: false, error: errMsg };
       }
+      setDbStatus((prev) => ({ ...prev, connected: true, error: undefined }));
+      setDbError(null);
       setUsers((prev) => prev.filter((u) => u.id !== id));
       return { success: true };
     } catch {
-      return { success: false, error: 'Lỗi kết nối khi xóa tài khoản' };
+      setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
+      setDbError(DEFAULT_DB_DISCONNECTED_MSG);
+      return { success: false, error: DEFAULT_DB_DISCONNECTED_MSG };
     }
   };
 
@@ -422,7 +541,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const unreadNotificationCount = notifications.filter((n) => !n.read).length;
 
-  // Add Student -> Saves directly to PostgreSQL database and binds to managing Trainer
+  // Add Student -> Saves strictly to PostgreSQL database; throws error if DB is unreachable
   const addStudent = async (
     studentData: Omit<StudentProfile, 'id' | 'createdAt'> & {
       initialUsername?: string;
@@ -458,44 +577,76 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       createdAt: new Date().toISOString().split('T')[0],
     };
 
-    const res = await fetch('/api/students', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-auth-username': currentUser?.username || 'admin',
-      },
-      body: JSON.stringify({
-        ...newStudent,
-        initialUsername: studentData.initialUsername || studentData.phone,
-        initialPassword: studentData.initialPassword || '123',
-      }),
-    });
-
-    if (res.ok) {
-      const saved = await res.json();
-      setAllStudents((prev) => [saved, ...prev.filter((s) => s.id !== saved.id)]);
-      setSelectedStudent(saved);
-      await fetchUsersList();
-      return saved;
+    let res: Response;
+    try {
+      res = await fetch('/api/students', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-auth-username': currentUser?.username || 'admin',
+        },
+        body: JSON.stringify({
+          ...newStudent,
+          initialUsername: studentData.initialUsername || studentData.phone,
+          initialPassword: studentData.initialPassword || '123',
+        }),
+      });
+    } catch {
+      setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
+      setDbError(DEFAULT_DB_DISCONNECTED_MSG);
+      throw new Error(DEFAULT_DB_DISCONNECTED_MSG);
     }
 
-    setAllStudents((prev) => [newStudent, ...prev]);
-    setSelectedStudent(newStudent);
-    return newStudent;
+    if (!res.ok) {
+      const errMsg = await handleApiErrorResponse(
+        res,
+        'Không thể lưu hồ sơ & tài khoản học viên vào Database!'
+      );
+      throw new Error(errMsg);
+    }
+
+    const saved = await res.json();
+    setDbStatus((prev) => ({ ...prev, connected: true, error: undefined }));
+    setDbError(null);
+    setAllStudents((prev) => [saved, ...prev.filter((s) => s.id !== saved.id)]);
+    setSelectedStudent(saved);
+    await fetchUsersList();
+    return saved;
   };
 
-  // Update Student -> Updates PostgreSQL database and recalculates AI calorie advice
+  // Update Student -> Saves strictly to PostgreSQL database FIRST; throws error if DB fails
   const updateStudent = async (student: StudentProfile) => {
-    setAllStudents((prev) => prev.map((s) => (s.id === student.id ? student : s)));
-    if (selectedStudent?.id === student.id) {
-      setSelectedStudent(student);
+    let res: Response;
+    try {
+      res = await fetch(`/api/students/${student.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(student),
+      });
+    } catch {
+      setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
+      setDbError(DEFAULT_DB_DISCONNECTED_MSG);
+      throw new Error(DEFAULT_DB_DISCONNECTED_MSG);
     }
 
-    await fetch(`/api/students/${student.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(student),
-    }).catch((err) => console.warn('Could not update student on DB', err));
+    if (!res.ok) {
+      const errMsg = await handleApiErrorResponse(
+        res,
+        'Không thể cập nhật thông tin học viên vào Database!'
+      );
+      throw new Error(errMsg);
+    }
+
+    const savedStudent = await res.json();
+    setDbStatus((prev) => ({ ...prev, connected: true, error: undefined }));
+    setDbError(null);
+
+    setAllStudents((prev) =>
+      prev.map((s) => (s.id === student.id ? { ...student, ...savedStudent } : s))
+    );
+    if (selectedStudent?.id === student.id) {
+      setSelectedStudent({ ...student, ...savedStudent });
+    }
 
     // Recalculate AI advice for latest measurement when target weight / duration changes
     const studentHistory = getStudentMetrics(student.id);
@@ -512,18 +663,41 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           aiDraftContent: updatedContent,
           trainerEditedContent: updatedContent.summary,
         };
-        setAdvices((prev) => prev.map((a) => (a.id === existingAdvice.id ? updatedAdvice : a)));
-        await fetch(`/api/advices/${existingAdvice.id}`, {
+        const advRes = await fetch(`/api/advices/${existingAdvice.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(updatedAdvice),
         }).catch(() => null);
+        if (advRes && advRes.ok) {
+          setAdvices((prev) =>
+            prev.map((a) => (a.id === existingAdvice.id ? updatedAdvice : a))
+          );
+        }
       }
     }
   };
 
-  // Delete Student
+  // Delete Student -> Strictly deletes in PostgreSQL database first
   const deleteStudent = async (id: string) => {
+    let res: Response;
+    try {
+      res = await fetch(`/api/students/${id}`, { method: 'DELETE' });
+    } catch {
+      setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
+      setDbError(DEFAULT_DB_DISCONNECTED_MSG);
+      throw new Error(DEFAULT_DB_DISCONNECTED_MSG);
+    }
+
+    if (!res.ok) {
+      const errMsg = await handleApiErrorResponse(
+        res,
+        'Không thể xóa học viên trên Database!'
+      );
+      throw new Error(errMsg);
+    }
+
+    setDbStatus((prev) => ({ ...prev, connected: true, error: undefined }));
+    setDbError(null);
     setAllStudents((prev) => {
       const updatedList = prev.filter((s) => s.id !== id);
       if (selectedStudent?.id === id) {
@@ -537,13 +711,9 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setWorkouts((prev) => prev.filter((w) => w.studentId !== id));
     setPhotos((prev) => prev.filter((p) => p.studentId !== id));
     setUsers((prev) => prev.filter((u) => u.studentId !== id));
-
-    await fetch(`/api/students/${id}`, { method: 'DELETE' }).catch((err) =>
-      console.warn('Could not delete student on DB', err)
-    );
   };
 
-  // Add Metric Record + Instant AI Advice saved to PostgreSQL
+  // Add Metric Record + Instant AI Advice saved strictly to PostgreSQL first
   const addMetricRecord = async (recordData: Omit<HealthMetricRecord, 'id' | 'timestamp'>) => {
     const timestamp = new Date(recordData.date).getTime() || Date.now();
     const newRecord: HealthMetricRecord = {
@@ -552,16 +722,34 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       timestamp,
     };
 
+    let res: Response;
+    try {
+      res = await fetch('/api/metrics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newRecord),
+      });
+    } catch {
+      setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
+      setDbError(DEFAULT_DB_DISCONNECTED_MSG);
+      throw new Error(DEFAULT_DB_DISCONNECTED_MSG);
+    }
+
+    if (!res.ok) {
+      const errMsg = await handleApiErrorResponse(
+        res,
+        'Không thể lưu chỉ số cân đo vào Database!'
+      );
+      throw new Error(errMsg);
+    }
+
+    setDbStatus((prev) => ({ ...prev, connected: true, error: undefined }));
+    setDbError(null);
+
     const studentHistory = getStudentMetrics(recordData.studentId);
     const previousRecord = studentHistory[studentHistory.length - 1];
 
     setMetrics((prev) => [...prev, newRecord].sort((a, b) => a.timestamp - b.timestamp));
-
-    await fetch('/api/metrics', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newRecord),
-    }).catch((err) => console.warn('Could not save metric to DB', err));
 
     const targetStudent = allStudents.find((s) => s.id === recordData.studentId);
     if (targetStudent) {
@@ -577,13 +765,15 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         approvedAt: new Date().toLocaleString('vi-VN'),
       };
 
-      setAdvices((prev) => [newAdvice, ...prev]);
-
-      await fetch('/api/advices', {
+      const advRes = await fetch('/api/advices', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newAdvice),
-      }).catch((err) => console.warn('Could not save advice to DB', err));
+      }).catch(() => null);
+
+      if (advRes && advRes.ok) {
+        setAdvices((prev) => [newAdvice, ...prev]);
+      }
 
       // Request Gemini AI 3-part health analysis and update DB record
       fetch('/api/ai/analyze-health', {
@@ -595,7 +785,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           previousMetric: previousRecord,
         }),
       })
-        .then((res) => (res.ok ? res.json() : null))
+        .then((r) => (r.ok ? r.json() : null))
         .then((aiData) => {
           if (aiData && aiData.success && aiData.analysis) {
             const enrichedAdvice: AIAdviceRecord = {
@@ -603,12 +793,19 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               aiDraftContent: aiData.analysis,
               trainerEditedContent: aiData.analysis.summary,
             };
-            setAdvices((prev) => prev.map((a) => (a.id === newAdvice.id ? enrichedAdvice : a)));
             fetch(`/api/advices/${newAdvice.id}`, {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(enrichedAdvice),
-            }).catch(() => null);
+            })
+              .then((putRes) => {
+                if (putRes.ok) {
+                  setAdvices((prev) =>
+                    prev.map((a) => (a.id === newAdvice.id ? enrichedAdvice : a))
+                  );
+                }
+              })
+              .catch(() => null);
           }
         })
         .catch(() => null);
@@ -630,17 +827,32 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
-  // Delete Metric Record
+  // Delete Metric Record -> Strictly deletes in PostgreSQL first
   const deleteMetricRecord = async (id: string) => {
+    let res: Response;
+    try {
+      res = await fetch(`/api/metrics/${id}`, { method: 'DELETE' });
+    } catch {
+      setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
+      setDbError(DEFAULT_DB_DISCONNECTED_MSG);
+      throw new Error(DEFAULT_DB_DISCONNECTED_MSG);
+    }
+
+    if (!res.ok) {
+      const errMsg = await handleApiErrorResponse(
+        res,
+        'Không thể xóa bản ghi cân đo trên Database!'
+      );
+      throw new Error(errMsg);
+    }
+
+    setDbStatus((prev) => ({ ...prev, connected: true, error: undefined }));
+    setDbError(null);
     setMetrics((prev) => prev.filter((m) => m.id !== id));
     setAdvices((prev) => prev.filter((a) => a.metricRecordId !== id));
-
-    await fetch(`/api/metrics/${id}`, { method: 'DELETE' }).catch((err) =>
-      console.warn('Could not delete metric from DB', err)
-    );
   };
 
-  // Add Meal Log
+  // Add Meal Log -> Strictly saves to PostgreSQL first
   const addMealLog = async (mealData: Omit<MealLog, 'id' | 'loggedAt'>) => {
     const newMeal: MealLog = {
       ...mealData,
@@ -649,13 +861,27 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       loggedAt: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
     };
 
-    setMeals((prev) => [newMeal, ...prev]);
+    let res: Response;
+    try {
+      res = await fetch('/api/meals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newMeal),
+      });
+    } catch {
+      setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
+      setDbError(DEFAULT_DB_DISCONNECTED_MSG);
+      throw new Error(DEFAULT_DB_DISCONNECTED_MSG);
+    }
 
-    await fetch('/api/meals', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newMeal),
-    }).catch((err) => console.warn('Could not save meal to DB', err));
+    if (!res.ok) {
+      const errMsg = await handleApiErrorResponse(res, 'Không thể lưu nhật ký bữa ăn vào Database!');
+      throw new Error(errMsg);
+    }
+
+    setDbStatus((prev) => ({ ...prev, connected: true, error: undefined }));
+    setDbError(null);
+    setMeals((prev) => [newMeal, ...prev]);
   };
 
   // Add Meal Trainer Feedback
@@ -664,20 +890,34 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     reaction: '🔥' | '💪' | '👏' | '❤️',
     comment?: string
   ) => {
+    let res: Response;
+    try {
+      res = await fetch(`/api/meals/${id}/feedback`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reaction, comment }),
+      });
+    } catch {
+      setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
+      setDbError(DEFAULT_DB_DISCONNECTED_MSG);
+      throw new Error(DEFAULT_DB_DISCONNECTED_MSG);
+    }
+
+    if (!res.ok) {
+      const errMsg = await handleApiErrorResponse(res, 'Không thể lưu phản hồi bữa ăn vào Database!');
+      throw new Error(errMsg);
+    }
+
+    setDbStatus((prev) => ({ ...prev, connected: true, error: undefined }));
+    setDbError(null);
     setMeals((prev) =>
       prev.map((m) =>
         m.id === id ? { ...m, trainerReaction: reaction, trainerComment: comment } : m
       )
     );
-
-    await fetch(`/api/meals/${id}/feedback`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reaction, comment }),
-    }).catch((err) => console.warn('Could not save meal feedback', err));
   };
 
-  // Upsert a 30-day meal ticket slot (Day 1..30, Morning & Afternoon portions)
+  // Upsert a 30-day meal ticket slot -> Strictly saves to PostgreSQL first
   const upsertMealTicket = async (params: {
     studentId: string;
     dayNumber: number;
@@ -696,10 +936,23 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       !params.attendanceStatus;
 
     if (isEmptySlot) {
+      let delRes: Response;
+      try {
+        delRes = await fetch(`/api/meals/${ticketId}`, { method: 'DELETE' });
+      } catch {
+        setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
+        setDbError(DEFAULT_DB_DISCONNECTED_MSG);
+        throw new Error(DEFAULT_DB_DISCONNECTED_MSG);
+      }
+
+      if (!delRes.ok) {
+        const errMsg = await handleApiErrorResponse(delRes, 'Không thể cập nhật phiếu ăn vào Database!');
+        throw new Error(errMsg);
+      }
+
+      setDbStatus((prev) => ({ ...prev, connected: true, error: undefined }));
+      setDbError(null);
       setMeals((prev) => prev.filter((m) => m.id !== ticketId));
-      await fetch(`/api/meals/${ticketId}`, { method: 'DELETE' }).catch((err) =>
-        console.warn('Could not delete empty meal ticket slot', err)
-      );
       return;
     }
 
@@ -734,21 +987,54 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       loggedAt: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
     };
 
-    setMeals((prev) => [newTicket, ...prev.filter((m) => m.id !== ticketId)]);
+    let res: Response;
+    try {
+      res = await fetch('/api/meals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newTicket),
+      });
+    } catch {
+      setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
+      setDbError(DEFAULT_DB_DISCONNECTED_MSG);
+      throw new Error(DEFAULT_DB_DISCONNECTED_MSG);
+    }
 
-    await fetch('/api/meals', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newTicket),
-    }).catch((err) => console.warn('Could not save meal ticket to DB', err));
+    if (!res.ok) {
+      const errMsg = await handleApiErrorResponse(
+        res,
+        'Không thể lưu phiếu bữa ăn vào Database!'
+      );
+      throw new Error(errMsg);
+    }
+
+    setDbStatus((prev) => ({ ...prev, connected: true, error: undefined }));
+    setDbError(null);
+    setMeals((prev) => [newTicket, ...prev.filter((m) => m.id !== ticketId)]);
   };
 
-  // Reset all 30-day meal tickets for a student (start a new 30-day card cycle)
+  // Reset all 30-day meal tickets for a student -> Strictly deletes in PostgreSQL first
   const resetStudentMealTickets = async (studentId: string) => {
+    let res: Response;
+    try {
+      res = await fetch(`/api/meals/student/${studentId}`, { method: 'DELETE' });
+    } catch {
+      setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
+      setDbError(DEFAULT_DB_DISCONNECTED_MSG);
+      throw new Error(DEFAULT_DB_DISCONNECTED_MSG);
+    }
+
+    if (!res.ok) {
+      const errMsg = await handleApiErrorResponse(
+        res,
+        'Không thể làm mới phiếu ăn 30 ngày trên Database!'
+      );
+      throw new Error(errMsg);
+    }
+
+    setDbStatus((prev) => ({ ...prev, connected: true, error: undefined }));
+    setDbError(null);
     setMeals((prev) => prev.filter((m) => m.studentId !== studentId));
-    await fetch(`/api/meals/student/${studentId}`, { method: 'DELETE' }).catch((err) =>
-      console.warn('Could not reset student meal tickets', err)
-    );
   };
 
   // Add Workout Log
@@ -759,13 +1045,27 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       loggedAt: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
     };
 
-    setWorkouts((prev) => [newWorkout, ...prev]);
+    let res: Response;
+    try {
+      res = await fetch('/api/workouts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newWorkout),
+      });
+    } catch {
+      setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
+      setDbError(DEFAULT_DB_DISCONNECTED_MSG);
+      throw new Error(DEFAULT_DB_DISCONNECTED_MSG);
+    }
 
-    await fetch('/api/workouts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newWorkout),
-    }).catch((err) => console.warn('Could not save workout to DB', err));
+    if (!res.ok) {
+      const errMsg = await handleApiErrorResponse(res, 'Không thể lưu nhật ký tập vào Database!');
+      throw new Error(errMsg);
+    }
+
+    setDbStatus((prev) => ({ ...prev, connected: true, error: undefined }));
+    setDbError(null);
+    setWorkouts((prev) => [newWorkout, ...prev]);
   };
 
   // Add Workout Feedback
@@ -774,17 +1074,31 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     reaction: '🔥' | '💪' | '👏' | '❤️',
     comment?: string
   ) => {
+    let res: Response;
+    try {
+      res = await fetch(`/api/workouts/${id}/feedback`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reaction, comment }),
+      });
+    } catch {
+      setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
+      setDbError(DEFAULT_DB_DISCONNECTED_MSG);
+      throw new Error(DEFAULT_DB_DISCONNECTED_MSG);
+    }
+
+    if (!res.ok) {
+      const errMsg = await handleApiErrorResponse(res, 'Không thể lưu phản hồi vào Database!');
+      throw new Error(errMsg);
+    }
+
+    setDbStatus((prev) => ({ ...prev, connected: true, error: undefined }));
+    setDbError(null);
     setWorkouts((prev) =>
       prev.map((w) =>
         w.id === id ? { ...w, trainerReaction: reaction, trainerComment: comment } : w
       )
     );
-
-    await fetch(`/api/workouts/${id}/feedback`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reaction, comment }),
-    }).catch((err) => console.warn('Could not save workout feedback', err));
   };
 
   // Add Physique Photo
@@ -793,22 +1107,36 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       ...photoData,
       id: `photo-${Date.now()}`,
     };
-    setPhotos((prev) => [...prev, newPhoto]);
 
-    await fetch('/api/photos', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newPhoto),
-    }).catch((err) => console.warn('Could not save photo to DB', err));
+    let res: Response;
+    try {
+      res = await fetch('/api/photos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newPhoto),
+      });
+    } catch {
+      setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
+      setDbError(DEFAULT_DB_DISCONNECTED_MSG);
+      throw new Error(DEFAULT_DB_DISCONNECTED_MSG);
+    }
+
+    if (!res.ok) {
+      const errMsg = await handleApiErrorResponse(res, 'Không thể lưu ảnh vào Database!');
+      throw new Error(errMsg);
+    }
+
+    setDbStatus((prev) => ({ ...prev, connected: true, error: undefined }));
+    setDbError(null);
+    setPhotos((prev) => [...prev, newPhoto]);
   };
 
   // Mark notification read
   const markNotificationRead = async (id: string) => {
-    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
-
-    await fetch(`/api/notifications/${id}/read`, { method: 'PUT' }).catch((err) =>
-      console.warn('Could not mark notification read', err)
-    );
+    const res = await fetch(`/api/notifications/${id}/read`, { method: 'PUT' }).catch(() => null);
+    if (res && res.ok) {
+      setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
+    }
   };
 
   return (
@@ -846,6 +1174,9 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         notifications,
         unreadNotificationCount,
         dbStatus,
+        dbError,
+        clearDbError,
+        refreshDatabase,
         addStudent,
         updateStudent,
         deleteStudent,

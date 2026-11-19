@@ -19,6 +19,9 @@ import {
   ShieldCheck,
   BookOpen,
   Utensils,
+  AlertTriangle,
+  RefreshCw,
+  X,
 } from 'lucide-react';
 
 const MainApp: React.FC = () => {
@@ -29,11 +32,22 @@ const MainApp: React.FC = () => {
     selectedStudent,
     setSelectedStudent,
     setOpenStandardsModal,
+    dbStatus,
+    dbError,
+    clearDbError,
+    refreshDatabase,
   } = useHealth();
 
   const [trainerSubView, setTrainerSubView] = useState<
     'directory' | 'detail' | 'nutrition' | 'trainers'
   >('directory');
+  const [isReconnecting, setIsReconnecting] = useState(false);
+
+  const handleRetryDb = async () => {
+    setIsReconnecting(true);
+    await refreshDatabase();
+    setIsReconnecting(false);
+  };
 
   // If not authenticated, show the complete LoginPage
   if (!currentUser) {
@@ -45,6 +59,46 @@ const MainApp: React.FC = () => {
       <Header />
 
       <main className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 pt-4 sm:pt-6">
+        {/* Strict Database Error Notification Banner */}
+        {(dbError || !dbStatus.connected) && (
+          <div className="mb-4 p-3.5 rounded-2xl bg-rose-50 border border-rose-300 text-rose-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs no-print">
+            <div className="flex items-start space-x-2.5 text-xs">
+              <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+              <div>
+                <div className="font-extrabold text-rose-950">
+                  Cảnh báo Kết nối Cơ sở dữ liệu PostgreSQL (Aiven Cloud)
+                </div>
+                <p className="text-rose-800 mt-0.5">
+                  {dbError ||
+                    dbStatus.error ||
+                    'Không thể kết nối đến Database. Hệ thống KHÔNG lưu tạm trên trình duyệt để tránh tạo hoặc cập nhật thông tin mà không được lưu thật.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleRetryDb}
+                disabled={isReconnecting}
+                className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold inline-flex items-center space-x-1.5 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isReconnecting ? 'animate-spin' : ''}`} />
+                <span>{isReconnecting ? 'Đang kết nối...' : 'Thử kết nối lại DB'}</span>
+              </button>
+              {dbError && (
+                <button
+                  type="button"
+                  onClick={clearDbError}
+                  className="p-1.5 text-rose-600 hover:bg-rose-100 rounded-lg cursor-pointer"
+                  title="Đóng thông báo"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
+        )}
         {role === 'trainer' || role === 'admin' ? (
           <div>
             {/* Trainer / Admin Uniform Sub-Navigation Bar */}

@@ -30,6 +30,8 @@ export const Header: React.FC = () => {
     markNotificationRead,
     setOpenReportModal,
     setOpenStandardsModal,
+    dbStatus,
+    refreshDatabase,
   } = useHealth();
 
   const [showNotifications, setShowNotifications] = useState(false);
@@ -95,15 +97,42 @@ export const Header: React.FC = () => {
               <span>Bảng Chỉ Số Cơ Thể</span>
             </button>
 
-            <div className="flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200/80 text-xs text-slate-600">
-              <Database className="w-3.5 h-3.5 text-emerald-600" />
-              <span className="font-medium">Aiven Cloud:</span>
-              <span className="font-semibold text-slate-800">TramTap</span>
-              <span className="flex h-2 w-2 relative">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            <button
+              type="button"
+              onClick={() => refreshDatabase()}
+              title={
+                dbStatus.connected
+                  ? `Đã kết nối PostgreSQL: ${dbStatus.host || 'Aiven Cloud'}`
+                  : dbStatus.error || 'Mất kết nối PostgreSQL - Bấm để thử kết nối lại'
+              }
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg border text-xs transition-colors cursor-pointer ${
+                dbStatus.connected
+                  ? 'bg-slate-50 border-slate-200/80 text-slate-600 hover:bg-slate-100'
+                  : 'bg-rose-50 border-rose-300 text-rose-800 font-bold'
+              }`}
+            >
+              <Database
+                className={`w-3.5 h-3.5 ${
+                  dbStatus.connected ? 'text-emerald-600' : 'text-rose-600'
+                }`}
+              />
+              <span className="font-medium">Aiven DB:</span>
+              <span className="font-semibold">
+                {dbStatus.connected ? 'defaultdb' : 'Mất kết nối DB'}
               </span>
-            </div>
+              <span className="flex h-2 w-2 relative">
+                <span
+                  className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                    dbStatus.connected ? 'bg-emerald-400' : 'bg-rose-400'
+                  }`}
+                ></span>
+                <span
+                  className={`relative inline-flex rounded-full h-2 w-2 ${
+                    dbStatus.connected ? 'bg-emerald-500' : 'bg-rose-600'
+                  }`}
+                ></span>
+              </span>
+            </button>
           </div>
 
           {/* Right Controls: Actions, Notifications & User Account */}

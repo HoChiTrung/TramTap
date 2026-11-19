@@ -57,6 +57,7 @@ export const AddMetricModal: React.FC<AddMetricModalProps> = ({
   const [waist, setWaist] = useState(latestMetric ? String(latestMetric.waist) : '80.0');
   const [notes, setNotes] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Real-time Preview Calculation
   const tempMetric: HealthMetricRecord = {
@@ -113,23 +114,34 @@ export const AddMetricModal: React.FC<AddMetricModalProps> = ({
 
     const wst = parseFloat(waist) || (latestMetric ? latestMetric.waist : 80.0);
 
-    await addMetricRecord({
-      studentId: student.id,
-      date,
-      weight: parseFloat(w.toFixed(2)),
-      subcutaneousFat: parseFloat(fat.toFixed(1)),
-      boneCalcium: parseFloat(bone.toFixed(1)),
-      bodyWater: parseFloat(water.toFixed(1)),
-      muscleMass: parseFloat(muscle.toFixed(2)),
-      bodyType,
-      bmr: b,
-      biologicalAge: bioAge,
-      visceralFat: visc,
-      waist: parseFloat(wst.toFixed(1)),
-      notes,
-    });
+    try {
+      setIsSubmitting(true);
+      await addMetricRecord({
+        studentId: student.id,
+        date,
+        weight: parseFloat(w.toFixed(2)),
+        subcutaneousFat: parseFloat(fat.toFixed(1)),
+        boneCalcium: parseFloat(bone.toFixed(1)),
+        bodyWater: parseFloat(water.toFixed(1)),
+        muscleMass: parseFloat(muscle.toFixed(2)),
+        bodyType,
+        bmr: b,
+        biologicalAge: bioAge,
+        visceralFat: visc,
+        waist: parseFloat(wst.toFixed(1)),
+        notes,
+      });
 
-    onClose();
+      onClose();
+    } catch (err: any) {
+      setErrors({
+        submit:
+          err?.message ||
+          'Không thể kết nối Cơ sở dữ liệu PostgreSQL để lưu chỉ số cân đo. Vui lòng thử lại!',
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -368,25 +380,32 @@ export const AddMetricModal: React.FC<AddMetricModalProps> = ({
             />
           </div>
 
+          {errors.submit && (
+            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
+              {errors.submit}
+            </div>
+          )}
+
           {/* Actions */}
           <div className="pt-3 border-t border-slate-100 flex flex-col-reverse sm:flex-row sm:items-center justify-between gap-3">
             <span className="text-[11px] text-slate-400 flex items-start sm:items-center min-w-0">
               <Info className="w-3.5 h-3.5 mr-1 shrink-0 mt-0.5 sm:mt-0" />
-              <span>Tự động lưu vào hệ thống & tạo dự thảo Lời khuyên AI</span>
+              <span>Lưu trực tiếp vào PostgreSQL Database &amp; tạo dự thảo Lời khuyên AI</span>
             </span>
             <div className="flex items-center justify-end gap-2 w-full sm:w-auto shrink-0">
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 sm:flex-initial px-4 py-2 border border-slate-200 rounded-xl font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
+                className="flex-1 sm:flex-initial px-4 py-2 border border-slate-200 rounded-xl font-semibold text-slate-600 hover:bg-slate-50 transition-colors cursor-pointer"
               >
                 Hủy
               </button>
               <button
                 type="submit"
-                className="flex-1 sm:flex-initial px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-semibold transition-colors shadow-xs whitespace-nowrap"
+                disabled={isSubmitting}
+                className="flex-1 sm:flex-initial px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-semibold transition-colors shadow-xs whitespace-nowrap cursor-pointer disabled:opacity-50"
               >
-                Lưu Nhật Ký Đo
+                {isSubmitting ? 'Đang lưu vào DB...' : 'Lưu Nhật Ký Đo'}
               </button>
             </div>
           </div>

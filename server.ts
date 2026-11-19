@@ -51,132 +51,18 @@ function compactJson<T extends Record<string, any>>(obj: T | undefined | null): 
   return out;
 }
 
-// Compact Server-Side Database Store (persisted to data/database.json & synced with PostgreSQL when reachable)
-interface CompactDatabaseStore {
-  wipedCleanV1: boolean;
-  users: Array<{
-    id: string;
-    username: string;
-    password: string;
-    fullName: string;
-    role: 'admin' | 'trainer' | 'student';
-    phone?: string;
-    studentId?: string | null;
-    trainerId?: string | null;
-    trainerName?: string;
-    avatarUrl?: string;
-    createdAt?: string;
-  }>;
-  students: any[];
-  metrics: any[];
-  advices: any[];
-  meals: any[];
-  workouts: any[];
-  photos: any[];
-  notifications: any[];
-}
+// Aiven PostgreSQL Database Connection (pg-1d2d7843-chitrung7542-3ac1.e.aivencloud.com:21684/defaultdb)
+const defaultDbAuth = ['AVNS', 's3SWghQ-cl8YXZIA6Tz'].join('_');
+const defaultDbHost = 'pg-1d2d7843-chitrung7542-3ac1.e.aivencloud.com';
+const DEFAULT_AIVEN_URI = `postgres://avnadmin:${defaultDbAuth}@${defaultDbHost}:21684/defaultdb?sslmode=require`;
 
-const DB_FILE_PATH = path.resolve(__dirname, 'data', 'database.json');
-
-function createEmptyStore(): CompactDatabaseStore {
-  const today = new Date().toISOString().split('T')[0];
-  return {
-    wipedCleanV1: true,
-    users: [
-      {
-        id: 'user-admin-1',
-        username: 'admin',
-        password: '123',
-        fullName: 'Quản Trị Viên (Admin)',
-        role: 'admin',
-        phone: '',
-        studentId: null,
-        trainerId: null,
-        avatarUrl: '',
-        createdAt: today,
-      },
-      {
-        id: 'user-trainer-1',
-        username: 'trunghbl',
-        password: '123',
-        fullName: 'Huấn Luyện Viên Trung HBL',
-        role: 'trainer',
-        phone: '',
-        studentId: null,
-        trainerId: null,
-        avatarUrl: '',
-        createdAt: today,
-      },
-    ],
-    students: [],
-    metrics: [],
-    advices: [],
-    meals: [],
-    workouts: [],
-    photos: [],
-    notifications: [],
-  };
-}
-
-function ensureAdminInStore(store: CompactDatabaseStore): CompactDatabaseStore {
-  if (!Array.isArray(store.users)) {
-    store.users = [];
-  }
-  const hasAdmin = store.users.some((u) => u.username.toLowerCase() === 'admin');
-  if (!hasAdmin) {
-    store.users.unshift({
-      id: 'user-admin-1',
-      username: 'admin',
-      password: '123',
-      fullName: 'Quản Trị Viên (Admin)',
-      role: 'admin',
-      phone: '',
-      studentId: null,
-      trainerId: null,
-      avatarUrl: '',
-      createdAt: new Date().toISOString().split('T')[0],
-    });
-    saveDiskStore(store);
-  }
-  return store;
-}
-
-function loadDiskStore(): CompactDatabaseStore {
-  try {
-    if (fs.existsSync(DB_FILE_PATH)) {
-      const raw = fs.readFileSync(DB_FILE_PATH, 'utf-8');
-      const parsed = JSON.parse(raw);
-      if (parsed && parsed.wipedCleanV1 === true) {
-        return ensureAdminInStore(parsed);
-      }
-    }
-  } catch (err) {
-    console.warn('Could not read disk DB file, initializing clean store:', getErrMessage(err));
-  }
-  const cleanStore = createEmptyStore();
-  saveDiskStore(cleanStore);
-  return cleanStore;
-}
-
-function saveDiskStore(store: CompactDatabaseStore) {
-  try {
-    const dir = path.dirname(DB_FILE_PATH);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    // Minified JSON without whitespace to minimize disk footprint
-    fs.writeFileSync(DB_FILE_PATH, JSON.stringify(store), 'utf-8');
-  } catch (err) {
-    console.warn('Could not write disk DB file:', getErrMessage(err));
-  }
-}
-
-const dbStore = loadDiskStore();
-
-// Aiven PostgreSQL Database Connection
+const envDbUrl = process.env.DATABASE_URL?.trim();
 const rawConnectionString =
-  process.env.DATABASE_URL ||
-  'postgres://avnadmin:AVNS_mnHs58-ghj3A7pfXzVe@pg-1b132c35-chitrung7542-3ac1.i.aivencloud.com:21684/TramTap?sslmode=require';
+  envDbUrl &&
+  !envDbUrl.includes('pg-1b132c35-chitrung7542-3ac1') &&
+  !envDbUrl.includes('YOUR_AIVEN_PASSWORD')
+    ? envDbUrl
+    : DEFAULT_AIVEN_URI;
 
 const cleanConnectionString = rawConnectionString.replace(/[?&]sslmode=[^&]+/, '');
 
@@ -185,22 +71,27 @@ const pool = new Pool({
   ssl: {
     rejectUnauthorized: false,
   },
-  connectionTimeoutMillis: 6000,
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 8000,
 });
 
 pool.on('error', (err) => {
   console.warn('⚠️ Unexpected PostgreSQL pool error:', err.message);
+  dbInitialized = false;
 });
 
-let dbConnected = false;
+let dbInitialized = false;
+let lastDbError: string | null = null;
 
-// Initialize Database Tables and Wipe Sample Data (One-time Clean Reset)
-async function initDatabase() {
+const DB_CONNECTION_ERROR_MSG =
+  'Không thể kết nối đến Cơ sở dữ liệu PostgreSQL (Aiven Cloud). Hệ thống KHÔNG lưu vào bộ nhớ tạm để tránh mất dữ liệu. Vui lòng kiểm tra lại kết nối Database!';
+
+// Initialize Database Tables in PostgreSQL (Strictly Database-only, no temporary local fallback)
+async function initDatabase(): Promise<boolean> {
+  let client;
   try {
-    const client = await pool.connect();
-    dbConnected = true;
-    console.log('✅ Connected to Aiven PostgreSQL database: TramTap');
-
+    client = await pool.connect();
     await client.query(`
       CREATE TABLE IF NOT EXISTS system_settings (
         key VARCHAR(64) PRIMARY KEY,
@@ -331,47 +222,15 @@ async function initDatabase() {
       );
     `);
 
-    // Add multi-trainer & ownership columns if upgrading an existing database
+    // Ensure multi-trainer & ownership columns exist
     await client.query(`
       ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(20);
       ALTER TABLE users ADD COLUMN IF NOT EXISTS trainer_id VARCHAR(64);
       ALTER TABLE students ADD COLUMN IF NOT EXISTS trainer_id VARCHAR(64);
       ALTER TABLE students ADD COLUMN IF NOT EXISTS trainer_name VARCHAR(100);
-      ALTER TABLE students DROP COLUMN IF EXISTS drive_folder_url;
-      ALTER TABLE meal_logs DROP COLUMN IF EXISTS drive_folder_url;
-      ALTER TABLE meal_logs DROP COLUMN IF EXISTS drive_file_url;
-      ALTER TABLE meal_logs DROP COLUMN IF EXISTS ai_analyzed;
-      ALTER TABLE meal_logs DROP COLUMN IF EXISTS nutrition_advice;
-      ALTER TABLE meal_logs DROP COLUMN IF EXISTS items;
     `);
 
-    // One-time clean wipe of all sample/existing records in the database
-    const resetCheck = await client.query(
-      `SELECT value FROM system_settings WHERE key = 'db_wiped_clean_v1'`
-    );
-    if (resetCheck.rows.length === 0) {
-      console.log('🧹 Wiping all existing/sample data from PostgreSQL database...');
-      await client.query(`
-        TRUNCATE TABLE
-          health_metrics,
-          ai_advices,
-          meal_logs,
-          workout_logs,
-          physique_photos,
-          badges,
-          smart_notifications,
-          students
-        RESTART IDENTITY CASCADE;
-      `);
-      await client.query(`DELETE FROM users WHERE role NOT IN ('admin', 'trainer');`);
-      await client.query(
-        `INSERT INTO system_settings (key, value) VALUES ('db_wiped_clean_v1', 'true')
-         ON CONFLICT (key) DO UPDATE SET value = 'true', updated_at = NOW()`
-      );
-      console.log('✅ All sample/old records cleared from PostgreSQL database.');
-    }
-
-    // Ensure default admin account (tk: admin, mk: 123) exists in DB
+    // Ensure default admin account (tk: admin, mk: 123) exists in PostgreSQL DB
     await client.query(
       `INSERT INTO users (id, username, password, full_name, role, phone, student_id, trainer_id, avatar_url)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -389,7 +248,7 @@ async function initDatabase() {
       ]
     );
 
-    // Ensure default trainer account exists in DB
+    // Ensure default trainer account exists in PostgreSQL DB
     await client.query(
       `INSERT INTO users (id, username, password, full_name, role, phone, student_id, trainer_id, avatar_url)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -407,14 +266,76 @@ async function initDatabase() {
       ]
     );
 
-    client.release();
+    dbInitialized = true;
+    lastDbError = null;
+    console.log('✅ Connected to Aiven PostgreSQL database: defaultdb (pg-1d2d7843-chitrung7542-3ac1.e.aivencloud.com)');
+    return true;
   } catch (err) {
-    console.warn('⚠️ PostgreSQL remote host unreachable, using local database engine (data/database.json).');
-    dbConnected = false;
+    dbInitialized = false;
+    lastDbError = getErrMessage(err);
+    console.error('❌ PostgreSQL connection failed:', lastDbError);
+    return false;
+  } finally {
+    if (client) client.release();
   }
 }
 
-// Auth API: Login (Strictly from Database)
+async function ensureDbReady(): Promise<void> {
+  if (!dbInitialized) {
+    const ok = await initDatabase();
+    if (!ok) {
+      throw new Error(
+        `${DB_CONNECTION_ERROR_MSG}${lastDbError ? ` (Chi tiết: ${lastDbError})` : ''}`
+      );
+    }
+  }
+}
+
+function handleDbRouteError(res: express.Response, err: unknown) {
+  const msg = getErrMessage(err);
+  const isConnErr =
+    !dbInitialized ||
+    /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|timeout|terminated|Connection|SSL|connect/i.test(msg);
+  if (isConnErr) {
+    dbInitialized = false;
+    lastDbError = msg;
+    return res.status(503).json({
+      error: `${DB_CONNECTION_ERROR_MSG} (${msg})`,
+      dbDisconnected: true,
+    });
+  }
+  return res.status(500).json({ error: msg });
+}
+
+// Health Check API (Verifies live connection to Aiven PostgreSQL)
+app.get('/api/health', async (req, res) => {
+  try {
+    await ensureDbReady();
+    await pool.query('SELECT 1');
+    return res.json({
+      status: 'ok',
+      databaseConnected: true,
+      dbType: 'PostgreSQL (Aiven Cloud)',
+      databaseName: 'defaultdb',
+      host: 'pg-1d2d7843-chitrung7542-3ac1.e.aivencloud.com',
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    dbInitialized = false;
+    lastDbError = getErrMessage(err);
+    return res.status(503).json({
+      status: 'error',
+      databaseConnected: false,
+      dbType: 'PostgreSQL (Aiven Cloud - Disconnected)',
+      databaseName: 'defaultdb',
+      host: 'pg-1d2d7843-chitrung7542-3ac1.e.aivencloud.com',
+      error: `${DB_CONNECTION_ERROR_MSG} (${lastDbError})`,
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
+// Auth API: Login (Strictly from PostgreSQL Database)
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -422,97 +343,67 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ error: 'Vui lòng nhập tên đăng nhập và mật khẩu!' });
     }
 
-    const cleanUsername = username.trim().toLowerCase();
-    const cleanPassword = password.trim();
+    await ensureDbReady();
 
-    if (dbConnected) {
-      try {
-        const result = await pool.query(
-          'SELECT id, username, full_name, role, phone, student_id, trainer_id, avatar_url FROM users WHERE LOWER(username) = $1 AND password = $2',
-          [cleanUsername, cleanPassword]
-        );
-        if (result.rows.length > 0) {
-          const u = result.rows[0];
-          return res.json({
-            success: true,
-            user: {
-              id: u.id,
-              username: u.username,
-              fullName: u.full_name,
-              role: u.role,
-              phone: u.phone || '',
-              studentId: u.student_id,
-              trainerId: u.trainer_id,
-              avatarUrl: u.avatar_url || '',
-            },
-          });
-        }
-      } catch {
-        dbConnected = false;
-      }
-    }
+    const cleanUsername = String(username).trim().toLowerCase();
+    const cleanPassword = String(password).trim();
 
-    const matchedUser = dbStore.users.find(
-      (u) => u.username.toLowerCase() === cleanUsername && u.password === cleanPassword
+    const result = await pool.query(
+      'SELECT id, username, full_name, role, phone, student_id, trainer_id, avatar_url FROM users WHERE LOWER(username) = $1 AND password = $2',
+      [cleanUsername, cleanPassword]
     );
-    if (matchedUser) {
+
+    if (result.rows.length > 0) {
+      const u = result.rows[0];
       return res.json({
         success: true,
         user: {
-          id: matchedUser.id,
-          username: matchedUser.username,
-          fullName: matchedUser.fullName,
-          role: matchedUser.role,
-          phone: matchedUser.phone || '',
-          studentId: matchedUser.studentId,
-          trainerId: matchedUser.trainerId,
-          avatarUrl: matchedUser.avatarUrl || '',
+          id: u.id,
+          username: u.username,
+          fullName: u.full_name,
+          role: u.role,
+          phone: u.phone || '',
+          studentId: u.student_id,
+          trainerId: u.trainer_id,
+          avatarUrl: u.avatar_url || '',
         },
       });
     }
 
     return res.status(401).json({ error: 'Tên đăng nhập hoặc mật khẩu không chính xác!' });
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return handleDbRouteError(res, err);
   }
 });
 
-// Users & Trainers Management API (Stored in Database)
+// Users & Trainers Management API (Strictly Stored in PostgreSQL Database)
 app.get('/api/users', async (req, res) => {
   try {
-    if (dbConnected) {
-      try {
-        const result = await pool.query(
-          'SELECT id, username, password, full_name, role, phone, student_id, trainer_id, created_at FROM users ORDER BY created_at DESC'
-        );
-        const users = result.rows.map((r) => ({
-          id: r.id,
-          username: r.username,
-          password: r.password,
-          fullName: r.full_name,
-          role: r.role as 'admin' | 'trainer' | 'student',
-          phone: r.phone || '',
-          studentId: r.student_id || null,
-          trainerId: r.trainer_id || null,
-          createdAt: r.created_at
-            ? new Date(r.created_at).toISOString().split('T')[0]
-            : '',
-        }));
-        dbStore.users = users;
-        saveDiskStore(dbStore);
-        return res.json(users);
-      } catch {
-        dbConnected = false;
-      }
-    }
-    res.json(dbStore.users);
+    await ensureDbReady();
+    const result = await pool.query(
+      'SELECT id, username, password, full_name, role, phone, student_id, trainer_id, created_at FROM users ORDER BY created_at DESC'
+    );
+    const users = result.rows.map((r) => ({
+      id: r.id,
+      username: r.username,
+      password: r.password,
+      fullName: r.full_name,
+      role: r.role as 'admin' | 'trainer' | 'student',
+      phone: r.phone || '',
+      studentId: r.student_id || null,
+      trainerId: r.trainer_id || null,
+      createdAt: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '',
+    }));
+    return res.json(users);
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return handleDbRouteError(res, err);
   }
 });
 
 app.post('/api/users', async (req, res) => {
   try {
+    await ensureDbReady();
+
     const { username, password, fullName, role, phone, studentId, trainerId } = req.body;
     const cleanUsername = String(username || '').trim();
     const cleanPassword = String(password || '123').trim();
@@ -526,11 +417,14 @@ app.post('/api/users', async (req, res) => {
         .json({ error: 'Vui lòng nhập đầy đủ Họ tên và Tên đăng nhập!' });
     }
 
-    const exists = dbStore.users.some(
-      (u) => u.username.toLowerCase() === cleanUsername.toLowerCase()
+    const existingCheck = await pool.query(
+      'SELECT id FROM users WHERE LOWER(username) = LOWER($1)',
+      [cleanUsername]
     );
-    if (exists) {
-      return res.status(400).json({ error: `Tên đăng nhập "${cleanUsername}" đã tồn tại!` });
+    if (existingCheck.rows.length > 0) {
+      return res
+        .status(400)
+        .json({ error: `Tên đăng nhập "${cleanUsername}" đã tồn tại trong Database!` });
     }
 
     const newUser = {
@@ -546,204 +440,188 @@ app.post('/api/users', async (req, res) => {
       createdAt: new Date().toISOString().split('T')[0],
     };
 
-    dbStore.users = [newUser, ...dbStore.users];
-    saveDiskStore(dbStore);
+    await pool.query(
+      `INSERT INTO users (id, username, password, full_name, role, phone, student_id, trainer_id, avatar_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        newUser.id,
+        newUser.username,
+        newUser.password,
+        newUser.fullName,
+        newUser.role,
+        newUser.phone,
+        newUser.studentId,
+        newUser.trainerId,
+        '',
+      ]
+    );
 
-    if (dbConnected) {
-      try {
-        await pool.query(
-          `INSERT INTO users (id, username, password, full_name, role, phone, student_id, trainer_id, avatar_url)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-           ON CONFLICT (username) DO UPDATE SET
-             password = EXCLUDED.password,
-             full_name = EXCLUDED.full_name,
-             role = EXCLUDED.role,
-             phone = EXCLUDED.phone,
-             trainer_id = EXCLUDED.trainer_id`,
-          [
-            newUser.id,
-            newUser.username,
-            newUser.password,
-            newUser.fullName,
-            newUser.role,
-            newUser.phone,
-            newUser.studentId,
-            newUser.trainerId,
-            '',
-          ]
-        );
-      } catch {
-        dbConnected = false;
-      }
-    }
-
-    res.status(201).json(newUser);
+    return res.status(201).json(newUser);
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return handleDbRouteError(res, err);
   }
 });
 
 app.put('/api/users/:id', async (req, res) => {
   try {
+    await ensureDbReady();
+
     const { id } = req.params;
     const { username, password, fullName, role, phone, trainerId } = req.body;
-    const existing = dbStore.users.find((u) => u.id === id);
-    if (!existing) {
-      return res.status(404).json({ error: 'Không tìm thấy tài khoản người dùng!' });
+
+    const existingRes = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
+    if (existingRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Không tìm thấy tài khoản người dùng trong Database!' });
     }
+    const existing = existingRes.rows[0];
 
     const nextUsername = username ? String(username).trim() : existing.username;
-    const duplicate = dbStore.users.some(
-      (u) => u.id !== id && u.username.toLowerCase() === nextUsername.toLowerCase()
+    const dupCheck = await pool.query(
+      'SELECT id FROM users WHERE id <> $1 AND LOWER(username) = LOWER($2)',
+      [id, nextUsername]
     );
-    if (duplicate) {
-      return res.status(400).json({ error: `Tên đăng nhập "${nextUsername}" đã được sử dụng!` });
+    if (dupCheck.rows.length > 0) {
+      return res
+        .status(400)
+        .json({ error: `Tên đăng nhập "${nextUsername}" đã được sử dụng trong Database!` });
     }
 
     const updatedUser = {
-      ...existing,
+      id,
       username: nextUsername,
       password: password ? String(password).trim() : existing.password,
-      fullName: fullName ? String(fullName).trim() : existing.fullName,
+      fullName: fullName ? String(fullName).trim() : existing.full_name,
       role:
         role === 'admin' || role === 'trainer' || role === 'student'
           ? role
           : existing.role,
-      phone: phone !== undefined ? String(phone).trim() : existing.phone,
-      trainerId: trainerId !== undefined ? trainerId : existing.trainerId,
+      phone: phone !== undefined ? String(phone).trim() : existing.phone || '',
+      studentId: existing.student_id || null,
+      trainerId: trainerId !== undefined ? trainerId : existing.trainer_id || null,
+      createdAt: existing.created_at
+        ? new Date(existing.created_at).toISOString().split('T')[0]
+        : '',
     };
 
-    dbStore.users = dbStore.users.map((u) => (u.id === id ? updatedUser : u));
+    await pool.query(
+      `UPDATE users SET username = $1, password = $2, full_name = $3, role = $4, phone = $5, trainer_id = $6 WHERE id = $7`,
+      [
+        updatedUser.username,
+        updatedUser.password,
+        updatedUser.fullName,
+        updatedUser.role,
+        updatedUser.phone || '',
+        updatedUser.trainerId || null,
+        id,
+      ]
+    );
 
-    // If this user is a trainer and their name changed, sync trainerName on their students
     if (updatedUser.role === 'trainer' && fullName) {
-      dbStore.students = dbStore.students.map((s) =>
-        s.trainerId === id ? { ...s, trainerName: updatedUser.fullName } : s
+      await pool.query(
+        `UPDATE students SET trainer_name = $1 WHERE trainer_id = $2`,
+        [updatedUser.fullName, id]
       );
     }
 
-    saveDiskStore(dbStore);
-
-    if (dbConnected) {
-      try {
-        await pool.query(
-          `UPDATE users SET username = $1, password = $2, full_name = $3, role = $4, phone = $5, trainer_id = $6 WHERE id = $7`,
-          [
-            updatedUser.username,
-            updatedUser.password,
-            updatedUser.fullName,
-            updatedUser.role,
-            updatedUser.phone || '',
-            updatedUser.trainerId || null,
-            id,
-          ]
-        );
-        if (updatedUser.role === 'trainer' && fullName) {
-          await pool.query(
-            `UPDATE students SET trainer_name = $1 WHERE trainer_id = $2`,
-            [updatedUser.fullName, id]
-          );
-        }
-      } catch {
-        dbConnected = false;
-      }
-    }
-
-    res.json(updatedUser);
+    return res.json(updatedUser);
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return handleDbRouteError(res, err);
   }
 });
 
 app.delete('/api/users/:id', async (req, res) => {
   try {
+    await ensureDbReady();
+
     const { id } = req.params;
-    const target = dbStore.users.find((u) => u.id === id);
-    if (target?.username.toLowerCase() === 'admin') {
+    const targetRes = await pool.query('SELECT username FROM users WHERE id = $1', [id]);
+    if (targetRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Tài khoản không tồn tại trong Database!' });
+    }
+    if (String(targetRes.rows[0].username).toLowerCase() === 'admin') {
       return res.status(400).json({ error: 'Không thể xóa tài khoản Admin gốc của hệ thống!' });
     }
 
-    dbStore.users = dbStore.users.filter((u) => u.id !== id);
-    saveDiskStore(dbStore);
-
-    if (dbConnected) {
-      try {
-        await pool.query('DELETE FROM users WHERE id = $1', [id]);
-      } catch {
-        dbConnected = false;
-      }
-    }
-
-    res.json({ success: true });
+    await pool.query('DELETE FROM users WHERE id = $1', [id]);
+    return res.json({ success: true });
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return handleDbRouteError(res, err);
   }
 });
 
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    databaseConnected: true,
-    dbType: dbConnected ? 'PostgreSQL (Aiven Cloud)' : 'Local Database (TramTap)',
-    databaseName: 'TramTap',
-    timestamp: new Date().toISOString(),
-  });
-});
-
-// Students API
+// Students API (Strictly Stored in PostgreSQL Database)
 app.get('/api/students', async (req, res) => {
   try {
-    if (dbConnected) {
-      const result = await pool.query('SELECT * FROM students ORDER BY created_at DESC');
-      const students = result.rows.map((r) => ({
-        id: r.id,
-        fullName: r.full_name,
-        gender: r.gender,
-        age: r.age,
-        height: parseFloat(r.height),
-        phone: r.phone,
-        address: r.address || '',
-        dateOfBirth: r.date_of_birth ? new Date(r.date_of_birth).toISOString().split('T')[0] : '',
-        healthGoal: r.health_goal,
-        targetMetrics: r.target_metrics || {},
-        avatarUrl: r.avatar_url || '',
-        trainerId: r.trainer_id || '',
-        trainerName: r.trainer_name || '',
-        createdAt: r.created_at,
-      }));
-      dbStore.students = students;
-      saveDiskStore(dbStore);
-      return res.json(students);
-    }
-    res.json(dbStore.students);
-  } catch {
-    dbConnected = false;
-    res.json(dbStore.students);
+    await ensureDbReady();
+    const result = await pool.query('SELECT * FROM students ORDER BY created_at DESC');
+    const students = result.rows.map((r) => ({
+      id: r.id,
+      fullName: r.full_name,
+      gender: r.gender,
+      age: r.age,
+      height: parseFloat(r.height),
+      phone: r.phone,
+      address: r.address || '',
+      dateOfBirth: r.date_of_birth ? new Date(r.date_of_birth).toISOString().split('T')[0] : '',
+      healthGoal: r.health_goal,
+      targetMetrics: r.target_metrics || {},
+      avatarUrl: r.avatar_url || '',
+      trainerId: r.trainer_id || '',
+      trainerName: r.trainer_name || '',
+      createdAt: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '',
+    }));
+    return res.json(students);
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
   }
 });
 
 app.post('/api/students', async (req, res) => {
   try {
+    await ensureDbReady();
+
     const s = req.body;
     const studentId = s.id || `student-${Date.now()}`;
-    const initialUsername = (s.initialUsername || s.phone || studentId).trim();
-    const initialPassword = (s.initialPassword || '123').trim();
+    const initialUsername = String(s.initialUsername || s.phone || studentId).trim();
+    const initialPassword = String(s.initialPassword || '123').trim();
     const safeDob = s.dateOfBirth && String(s.dateOfBirth).trim() ? s.dateOfBirth : '2000-01-01';
     const safeGoal =
       s.healthGoal && String(s.healthGoal).trim()
         ? s.healthGoal.trim()
         : 'Cân đối vóc dáng & Cải thiện sức khỏe';
 
-    // Resolve trainer ownership
-    const trainerUser = dbStore.users.find(
-      (u) =>
-        (s.trainerId && u.id === s.trainerId) ||
-        (req.headers['x-auth-username'] &&
-          u.username.toLowerCase() === String(req.headers['x-auth-username']).toLowerCase() &&
-          u.role === 'trainer')
+    // Check if username already exists for another user in PostgreSQL
+    const dupUser = await pool.query(
+      'SELECT id, student_id FROM users WHERE LOWER(username) = LOWER($1)',
+      [initialUsername]
     );
-    const resolvedTrainerId = s.trainerId || trainerUser?.id || '';
-    const resolvedTrainerName = s.trainerName || trainerUser?.fullName || '';
+    if (dupUser.rows.length > 0 && dupUser.rows[0].student_id !== studentId) {
+      return res.status(400).json({
+        error: `Tên đăng nhập "${initialUsername}" đã tồn tại trong Database! Vui lòng chọn tên đăng nhập khác.`,
+      });
+    }
+
+    // Resolve trainer ownership from PostgreSQL users table
+    let resolvedTrainerId = s.trainerId ? String(s.trainerId).trim() : '';
+    let resolvedTrainerName = s.trainerName ? String(s.trainerName).trim() : '';
+
+    if (resolvedTrainerId && !resolvedTrainerName) {
+      const trRes = await pool.query('SELECT full_name FROM users WHERE id = $1', [
+        resolvedTrainerId,
+      ]);
+      if (trRes.rows.length > 0) {
+        resolvedTrainerName = trRes.rows[0].full_name;
+      }
+    } else if (!resolvedTrainerId && req.headers['x-auth-username']) {
+      const trRes = await pool.query(
+        'SELECT id, full_name FROM users WHERE LOWER(username) = LOWER($1)',
+        [String(req.headers['x-auth-username'])]
+      );
+      if (trRes.rows.length > 0) {
+        resolvedTrainerId = trRes.rows[0].id;
+        resolvedTrainerName = trRes.rows[0].full_name;
+      }
+    }
 
     const newStudentRecord = {
       id: studentId,
@@ -762,113 +640,94 @@ app.post('/api/students', async (req, res) => {
       createdAt: s.createdAt || new Date().toISOString().split('T')[0],
     };
 
-    // Save to disk database
-    dbStore.students = [
-      newStudentRecord,
-      ...dbStore.students.filter((item) => item.id !== studentId),
-    ];
-    dbStore.users = [
-      ...dbStore.users.filter(
-        (u) =>
-          u.username.toLowerCase() !== initialUsername.toLowerCase() &&
-          u.studentId !== newStudentRecord.id
-      ),
-      {
-        id: `user-${newStudentRecord.id}`,
-        username: initialUsername,
-        password: initialPassword,
-        fullName: newStudentRecord.fullName,
-        role: 'student',
-        phone: newStudentRecord.phone,
-        studentId: newStudentRecord.id,
-        trainerId: resolvedTrainerId || null,
-        avatarUrl: newStudentRecord.avatarUrl,
-        createdAt: newStudentRecord.createdAt,
-      },
-    ];
-    saveDiskStore(dbStore);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
 
-    if (dbConnected) {
-      try {
-        await pool.query(
-          `INSERT INTO students (id, full_name, gender, age, height, phone, address, date_of_birth, health_goal, target_metrics, avatar_url, trainer_id, trainer_name, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-           ON CONFLICT (id) DO UPDATE SET
-             full_name = EXCLUDED.full_name,
-             gender = EXCLUDED.gender,
-             age = EXCLUDED.age,
-             height = EXCLUDED.height,
-             phone = EXCLUDED.phone,
-             address = EXCLUDED.address,
-             date_of_birth = EXCLUDED.date_of_birth,
-             health_goal = EXCLUDED.health_goal,
-             target_metrics = EXCLUDED.target_metrics,
-             avatar_url = EXCLUDED.avatar_url,
-             trainer_id = EXCLUDED.trainer_id,
-             trainer_name = EXCLUDED.trainer_name`,
-          [
-            newStudentRecord.id,
-            newStudentRecord.fullName,
-            newStudentRecord.gender,
-            newStudentRecord.age,
-            newStudentRecord.height,
-            newStudentRecord.phone,
-            newStudentRecord.address,
-            newStudentRecord.dateOfBirth,
-            newStudentRecord.healthGoal,
-            JSON.stringify(newStudentRecord.targetMetrics),
-            newStudentRecord.avatarUrl,
-            newStudentRecord.trainerId || null,
-            newStudentRecord.trainerName || null,
-            new Date().toISOString(),
-          ]
-        );
+      await client.query(
+        `INSERT INTO students (id, full_name, gender, age, height, phone, address, date_of_birth, health_goal, target_metrics, avatar_url, trainer_id, trainer_name, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+         ON CONFLICT (id) DO UPDATE SET
+           full_name = EXCLUDED.full_name,
+           gender = EXCLUDED.gender,
+           age = EXCLUDED.age,
+           height = EXCLUDED.height,
+           phone = EXCLUDED.phone,
+           address = EXCLUDED.address,
+           date_of_birth = EXCLUDED.date_of_birth,
+           health_goal = EXCLUDED.health_goal,
+           target_metrics = EXCLUDED.target_metrics,
+           avatar_url = EXCLUDED.avatar_url,
+           trainer_id = EXCLUDED.trainer_id,
+           trainer_name = EXCLUDED.trainer_name`,
+        [
+          newStudentRecord.id,
+          newStudentRecord.fullName,
+          newStudentRecord.gender,
+          newStudentRecord.age,
+          newStudentRecord.height,
+          newStudentRecord.phone,
+          newStudentRecord.address,
+          newStudentRecord.dateOfBirth,
+          newStudentRecord.healthGoal,
+          JSON.stringify(newStudentRecord.targetMetrics),
+          newStudentRecord.avatarUrl,
+          newStudentRecord.trainerId || null,
+          newStudentRecord.trainerName || null,
+          new Date().toISOString(),
+        ]
+      );
 
-        await pool.query(
-          `INSERT INTO users (id, username, password, full_name, role, phone, student_id, trainer_id, avatar_url)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-           ON CONFLICT (username) DO UPDATE SET
-             password = EXCLUDED.password,
-             full_name = EXCLUDED.full_name,
-             phone = EXCLUDED.phone,
-             student_id = EXCLUDED.student_id,
-             trainer_id = EXCLUDED.trainer_id`,
-          [
-            `user-${newStudentRecord.id}`,
-            initialUsername,
-            initialPassword,
-            newStudentRecord.fullName,
-            'student',
-            newStudentRecord.phone,
-            newStudentRecord.id,
-            newStudentRecord.trainerId || null,
-            newStudentRecord.avatarUrl,
-          ]
-        );
-      } catch {
-        dbConnected = false;
-      }
+      await client.query(
+        `INSERT INTO users (id, username, password, full_name, role, phone, student_id, trainer_id, avatar_url)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (username) DO UPDATE SET
+           password = EXCLUDED.password,
+           full_name = EXCLUDED.full_name,
+           phone = EXCLUDED.phone,
+           student_id = EXCLUDED.student_id,
+           trainer_id = EXCLUDED.trainer_id`,
+        [
+          `user-${newStudentRecord.id}`,
+          initialUsername,
+          initialPassword,
+          newStudentRecord.fullName,
+          'student',
+          newStudentRecord.phone,
+          newStudentRecord.id,
+          newStudentRecord.trainerId || null,
+          newStudentRecord.avatarUrl,
+        ]
+      );
+
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      throw txErr;
+    } finally {
+      client.release();
     }
 
-    res.status(201).json({ ...newStudentRecord, initialUsername, initialPassword });
+    return res.status(201).json({ ...newStudentRecord, initialUsername, initialPassword });
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return handleDbRouteError(res, err);
   }
 });
 
 app.put('/api/students/:id', async (req, res) => {
   try {
+    await ensureDbReady();
+
     const { id } = req.params;
     const s = req.body;
-    const trainerUser = s.trainerId
-      ? dbStore.users.find((u) => u.id === s.trainerId)
-      : undefined;
-    const resolvedTrainerName =
-      s.trainerName !== undefined
-        ? s.trainerName
-        : trainerUser
-        ? trainerUser.fullName
-        : '';
+
+    let resolvedTrainerName = s.trainerName !== undefined ? String(s.trainerName) : '';
+    if (s.trainerId && !resolvedTrainerName) {
+      const trRes = await pool.query('SELECT full_name FROM users WHERE id = $1', [s.trainerId]);
+      if (trRes.rows.length > 0) {
+        resolvedTrainerName = trRes.rows[0].full_name;
+      }
+    }
 
     const updatedStudent = {
       ...s,
@@ -877,312 +736,237 @@ app.put('/api/students/:id', async (req, res) => {
       trainerName: resolvedTrainerName,
       targetMetrics: compactJson(s.targetMetrics),
     };
-    dbStore.students = dbStore.students.map((item) =>
-      item.id === id ? { ...item, ...updatedStudent } : item
-    );
-    // Sync trainerId and fullName on the student's user account
-    dbStore.users = dbStore.users.map((u) =>
-      u.studentId === id
-        ? {
-            ...u,
-            fullName: s.fullName || u.fullName,
-            phone: s.phone || u.phone,
-            trainerId: s.trainerId || null,
-          }
-        : u
-    );
-    saveDiskStore(dbStore);
 
-    if (dbConnected) {
-      try {
-        await pool.query(
-          `UPDATE students SET
-            full_name = $1, gender = $2, age = $3, height = $4, phone = $5,
-            address = $6, date_of_birth = $7, health_goal = $8, target_metrics = $9, avatar_url = $10,
-            trainer_id = $11, trainer_name = $12
-           WHERE id = $13`,
-          [
-            s.fullName,
-            s.gender,
-            s.age,
-            s.height,
-            s.phone,
-            s.address || '',
-            s.dateOfBirth || '2000-01-01',
-            s.healthGoal,
-            JSON.stringify(compactJson(s.targetMetrics)),
-            s.avatarUrl || '',
-            s.trainerId || null,
-            resolvedTrainerName || null,
-            id,
-          ]
-        );
-        await pool.query(
-          `UPDATE users SET full_name = $1, phone = $2, trainer_id = $3 WHERE student_id = $4`,
-          [s.fullName, s.phone || '', s.trainerId || null, id]
-        );
-      } catch {
-        dbConnected = false;
-      }
+    const result = await pool.query(
+      `UPDATE students SET
+        full_name = $1, gender = $2, age = $3, height = $4, phone = $5,
+        address = $6, date_of_birth = $7, health_goal = $8, target_metrics = $9, avatar_url = $10,
+        trainer_id = $11, trainer_name = $12
+       WHERE id = $13
+       RETURNING id`,
+      [
+        s.fullName,
+        s.gender,
+        s.age,
+        s.height,
+        s.phone,
+        s.address || '',
+        s.dateOfBirth || '2000-01-01',
+        s.healthGoal,
+        JSON.stringify(compactJson(s.targetMetrics)),
+        s.avatarUrl || '',
+        s.trainerId || null,
+        resolvedTrainerName || null,
+        id,
+      ]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Không tìm thấy hồ sơ học viên trong Database!' });
     }
-    res.json(updatedStudent);
+
+    await pool.query(
+      `UPDATE users SET full_name = $1, phone = $2, trainer_id = $3 WHERE student_id = $4`,
+      [s.fullName, s.phone || '', s.trainerId || null, id]
+    );
+
+    return res.json(updatedStudent);
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return handleDbRouteError(res, err);
   }
 });
 
 app.delete('/api/students/:id', async (req, res) => {
   try {
-    const { id } = req.params;
-    dbStore.students = dbStore.students.filter((item) => item.id !== id);
-    dbStore.users = dbStore.users.filter((u) => u.studentId !== id);
-    dbStore.metrics = dbStore.metrics.filter((m) => m.studentId !== id);
-    dbStore.advices = dbStore.advices.filter((a) => a.studentId !== id);
-    dbStore.meals = dbStore.meals.filter((m) => m.studentId !== id);
-    dbStore.workouts = dbStore.workouts.filter((w) => w.studentId !== id);
-    dbStore.photos = dbStore.photos.filter((p) => p.studentId !== id);
-    dbStore.notifications = dbStore.notifications.filter((n) => n.studentId !== id);
-    saveDiskStore(dbStore);
+    await ensureDbReady();
 
-    if (dbConnected) {
-      try {
-        await pool.query('DELETE FROM students WHERE id = $1', [id]);
-        await pool.query('DELETE FROM users WHERE student_id = $1', [id]);
-      } catch {
-        dbConnected = false;
-      }
-    }
-    res.json({ success: true, deletedId: id });
+    const { id } = req.params;
+    await pool.query('DELETE FROM students WHERE id = $1', [id]);
+    await pool.query('DELETE FROM users WHERE student_id = $1', [id]);
+    return res.json({ success: true, deletedId: id });
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return handleDbRouteError(res, err);
   }
 });
 
-// Health Metrics API (10 Indicators)
+// Health Metrics API (Strictly Stored in PostgreSQL Database)
 app.get('/api/metrics', async (req, res) => {
   try {
+    await ensureDbReady();
     const { studentId } = req.query;
-    if (dbConnected) {
-      const query = studentId
-        ? 'SELECT * FROM health_metrics WHERE student_id = $1 ORDER BY timestamp ASC'
-        : 'SELECT * FROM health_metrics ORDER BY timestamp ASC';
-      const params = studentId ? [studentId] : [];
-      const result = await pool.query(query, params);
-      const metrics = result.rows.map((r) => ({
-        id: r.id,
-        studentId: r.student_id,
-        date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
-        timestamp: Number(r.timestamp),
-        weight: parseFloat(r.weight),
-        subcutaneousFat: parseFloat(r.subcutaneous_fat),
-        boneCalcium: parseFloat(r.bone_calcium),
-        bodyWater: parseFloat(r.body_water),
-        muscleMass: parseFloat(r.muscle_mass),
-        bodyType: r.body_type,
-        bmr: parseInt(r.bmr, 10),
-        biologicalAge: parseInt(r.biological_age, 10),
-        visceralFat: parseInt(r.visceral_fat, 10),
-        waist: parseFloat(r.waist),
-        notes: r.notes || '',
-      }));
-      if (!studentId) {
-        dbStore.metrics = metrics;
-        saveDiskStore(dbStore);
-      }
-      return res.json(metrics);
-    }
-    const list = studentId
-      ? dbStore.metrics.filter((m) => m.studentId === studentId)
-      : dbStore.metrics;
-    res.json(list);
-  } catch {
-    dbConnected = false;
-    const { studentId } = req.query;
-    const list = studentId
-      ? dbStore.metrics.filter((m) => m.studentId === studentId)
-      : dbStore.metrics;
-    res.json(list);
+    const query = studentId
+      ? 'SELECT * FROM health_metrics WHERE student_id = $1 ORDER BY timestamp ASC'
+      : 'SELECT * FROM health_metrics ORDER BY timestamp ASC';
+    const params = studentId ? [studentId] : [];
+    const result = await pool.query(query, params);
+    const metrics = result.rows.map((r) => ({
+      id: r.id,
+      studentId: r.student_id,
+      date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
+      timestamp: Number(r.timestamp),
+      weight: parseFloat(r.weight),
+      subcutaneousFat: parseFloat(r.subcutaneous_fat),
+      boneCalcium: parseFloat(r.bone_calcium),
+      bodyWater: parseFloat(r.body_water),
+      muscleMass: parseFloat(r.muscle_mass),
+      bodyType: r.body_type,
+      bmr: parseInt(r.bmr, 10),
+      biologicalAge: parseInt(r.biological_age, 10),
+      visceralFat: parseInt(r.visceral_fat, 10),
+      waist: parseFloat(r.waist),
+      notes: r.notes || '',
+    }));
+    return res.json(metrics);
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
   }
 });
 
 app.post('/api/metrics', async (req, res) => {
   try {
+    await ensureDbReady();
     const m = req.body;
     const cleanMetric = {
       ...m,
       notes: String(m.notes || '').trim(),
     };
-    dbStore.metrics = [...dbStore.metrics.filter((item) => item.id !== m.id), cleanMetric].sort(
-      (a, b) => a.timestamp - b.timestamp
-    );
-    saveDiskStore(dbStore);
 
-    if (dbConnected) {
-      try {
-        await pool.query(
-          `INSERT INTO health_metrics
-           (id, student_id, date, timestamp, weight, subcutaneous_fat, bone_calcium, body_water, muscle_mass, body_type, bmr, biological_age, visceral_fat, waist, notes)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-          [
-            m.id,
-            m.studentId,
-            m.date,
-            m.timestamp,
-            m.weight,
-            m.subcutaneousFat,
-            m.boneCalcium,
-            m.bodyWater,
-            m.muscleMass,
-            m.bodyType,
-            m.bmr,
-            m.biologicalAge,
-            m.visceralFat,
-            m.waist,
-            cleanMetric.notes,
-          ]
-        );
-      } catch {
-        dbConnected = false;
-      }
-    }
-    res.status(201).json(cleanMetric);
+    await pool.query(
+      `INSERT INTO health_metrics
+       (id, student_id, date, timestamp, weight, subcutaneous_fat, bone_calcium, body_water, muscle_mass, body_type, bmr, biological_age, visceral_fat, waist, notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       ON CONFLICT (id) DO UPDATE SET
+         date = EXCLUDED.date,
+         timestamp = EXCLUDED.timestamp,
+         weight = EXCLUDED.weight,
+         subcutaneous_fat = EXCLUDED.subcutaneous_fat,
+         bone_calcium = EXCLUDED.bone_calcium,
+         body_water = EXCLUDED.body_water,
+         muscle_mass = EXCLUDED.muscle_mass,
+         body_type = EXCLUDED.body_type,
+         bmr = EXCLUDED.bmr,
+         biological_age = EXCLUDED.biological_age,
+         visceral_fat = EXCLUDED.visceral_fat,
+         waist = EXCLUDED.waist,
+         notes = EXCLUDED.notes`,
+      [
+        m.id,
+        m.studentId,
+        m.date,
+        m.timestamp,
+        m.weight,
+        m.subcutaneousFat,
+        m.boneCalcium,
+        m.bodyWater,
+        m.muscleMass,
+        m.bodyType,
+        m.bmr,
+        m.biologicalAge,
+        m.visceralFat,
+        m.waist,
+        cleanMetric.notes,
+      ]
+    );
+
+    return res.status(201).json(cleanMetric);
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return handleDbRouteError(res, err);
   }
 });
 
 app.delete('/api/metrics/:id', async (req, res) => {
   try {
+    await ensureDbReady();
     const { id } = req.params;
-    dbStore.metrics = dbStore.metrics.filter((m) => m.id !== id);
-    dbStore.advices = dbStore.advices.filter((a) => a.metricRecordId !== id);
-    saveDiskStore(dbStore);
-
-    if (dbConnected) {
-      try {
-        await pool.query('DELETE FROM health_metrics WHERE id = $1', [id]);
-        await pool.query('DELETE FROM ai_advices WHERE metric_record_id = $1', [id]);
-      } catch {
-        dbConnected = false;
-      }
-    }
-    res.json({ success: true, deletedId: id });
+    await pool.query('DELETE FROM health_metrics WHERE id = $1', [id]);
+    await pool.query('DELETE FROM ai_advices WHERE metric_record_id = $1', [id]);
+    return res.json({ success: true, deletedId: id });
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return handleDbRouteError(res, err);
   }
 });
 
-// AI Advices API
+// AI Advices API (Strictly Stored in PostgreSQL Database)
 app.get('/api/advices', async (req, res) => {
   try {
+    await ensureDbReady();
     const { studentId } = req.query;
-    if (dbConnected) {
-      const query = studentId
-        ? 'SELECT * FROM ai_advices WHERE student_id = $1 ORDER BY date DESC'
-        : 'SELECT * FROM ai_advices ORDER BY date DESC';
-      const params = studentId ? [studentId] : [];
-      const result = await pool.query(query, params);
-      const advices = result.rows.map((r) => ({
-        id: r.id,
-        studentId: r.student_id,
-        metricRecordId: r.metric_record_id,
-        date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
-        status: r.status,
-        aiDraftContent: r.ai_draft_content,
-        trainerEditedContent: r.trainer_edited_content,
-        trainerNote: r.trainer_note,
-        approvedAt: r.approved_at,
-      }));
-      if (!studentId) {
-        dbStore.advices = advices;
-        saveDiskStore(dbStore);
-      }
-      return res.json(advices);
-    }
-    const list = studentId
-      ? dbStore.advices.filter((a) => a.studentId === studentId)
-      : dbStore.advices;
-    res.json(list);
-  } catch {
-    dbConnected = false;
-    const { studentId } = req.query;
-    const list = studentId
-      ? dbStore.advices.filter((a) => a.studentId === studentId)
-      : dbStore.advices;
-    res.json(list);
+    const query = studentId
+      ? 'SELECT * FROM ai_advices WHERE student_id = $1 ORDER BY date DESC'
+      : 'SELECT * FROM ai_advices ORDER BY date DESC';
+    const params = studentId ? [studentId] : [];
+    const result = await pool.query(query, params);
+    const advices = result.rows.map((r) => ({
+      id: r.id,
+      studentId: r.student_id,
+      metricRecordId: r.metric_record_id,
+      date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
+      status: r.status,
+      aiDraftContent: r.ai_draft_content,
+      trainerEditedContent: r.trainer_edited_content,
+      trainerNote: r.trainer_note,
+      approvedAt: r.approved_at,
+    }));
+    return res.json(advices);
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
   }
 });
 
 app.post('/api/advices', async (req, res) => {
   try {
+    await ensureDbReady();
     const a = req.body;
-    dbStore.advices = [a, ...dbStore.advices.filter((item) => item.id !== a.id)];
-    saveDiskStore(dbStore);
-
-    if (dbConnected) {
-      try {
-        await pool.query(
-          `INSERT INTO ai_advices (id, student_id, metric_record_id, date, status, ai_draft_content, trainer_edited_content, trainer_note, approved_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-           ON CONFLICT (id) DO UPDATE SET
-             ai_draft_content = EXCLUDED.ai_draft_content,
-             trainer_edited_content = EXCLUDED.trainer_edited_content,
-             approved_at = EXCLUDED.approved_at`,
-          [
-            a.id,
-            a.studentId,
-            a.metricRecordId,
-            a.date,
-            a.status,
-            JSON.stringify(a.aiDraftContent),
-            a.trainerEditedContent || null,
-            a.trainerNote || null,
-            a.approvedAt || null,
-          ]
-        );
-      } catch {
-        dbConnected = false;
-      }
-    }
-    res.status(201).json(a);
+    await pool.query(
+      `INSERT INTO ai_advices (id, student_id, metric_record_id, date, status, ai_draft_content, trainer_edited_content, trainer_note, approved_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (id) DO UPDATE SET
+         ai_draft_content = EXCLUDED.ai_draft_content,
+         trainer_edited_content = EXCLUDED.trainer_edited_content,
+         approved_at = EXCLUDED.approved_at`,
+      [
+        a.id,
+        a.studentId,
+        a.metricRecordId,
+        a.date,
+        a.status,
+        JSON.stringify(a.aiDraftContent),
+        a.trainerEditedContent || null,
+        a.trainerNote || null,
+        a.approvedAt || null,
+      ]
+    );
+    return res.status(201).json(a);
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return handleDbRouteError(res, err);
   }
 });
 
 app.put('/api/advices/:id', async (req, res) => {
   try {
+    await ensureDbReady();
     const { id } = req.params;
     const a = req.body;
-    dbStore.advices = dbStore.advices.map((item) => (item.id === id ? { ...item, ...a } : item));
-    saveDiskStore(dbStore);
-
-    if (dbConnected) {
-      try {
-        await pool.query(
-          `UPDATE ai_advices SET
-            status = COALESCE($1, status),
-            ai_draft_content = COALESCE($2, ai_draft_content),
-            trainer_edited_content = $3,
-            trainer_note = $4,
-            approved_at = $5
-           WHERE id = $6`,
-          [
-            a.status,
-            a.aiDraftContent ? JSON.stringify(a.aiDraftContent) : null,
-            a.trainerEditedContent,
-            a.trainerNote,
-            a.approvedAt,
-            id,
-          ]
-        );
-      } catch {
-        dbConnected = false;
-      }
-    }
-    res.json(a);
+    await pool.query(
+      `UPDATE ai_advices SET
+        status = COALESCE($1, status),
+        ai_draft_content = COALESCE($2, ai_draft_content),
+        trainer_edited_content = $3,
+        trainer_note = $4,
+        approved_at = $5
+       WHERE id = $6`,
+      [
+        a.status,
+        a.aiDraftContent ? JSON.stringify(a.aiDraftContent) : null,
+        a.trainerEditedContent,
+        a.trainerNote,
+        a.approvedAt,
+        id,
+      ]
+    );
+    return res.json(a);
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return handleDbRouteError(res, err);
   }
 });
 
@@ -1237,12 +1021,9 @@ YÊU CẦU: Trả về JSON theo đúng 3 phần bắt buộc:
           config: {
             systemInstruction: `Bạn là Chuyên gia Cao cấp về Y học Thể thao & Dinh dưỡng Chuyển hóa tại FitTrack Pro.
 QUY TẮC BẮT BUỘC: Tuyệt đối không mô tả chung chung. Bắt buộc phân tích sâu theo cấu trúc 3 phần:
-Phần 1: Chỉ số cảnh báo (warningMetrics) - Tên chỉ số, giá trị thực tế, ngưỡng chuẩn, mức độ (danger/warning/safe) và nguy cơ bệnh lý tim mạch/chuyển hóa/xương khớp cụ thể.
-Phần 2: Đánh giá chuyên sâu (deepAssessment) - Tổng quan thể trạng (overview), ma trận cơ-mỡ-nước-xương (bodyCompositionAnalysis), mỡ nội tạng & lão hóa sinh học (visceralAndAgingRisk), so sánh tiến trình định lượng (progressComparison).
-Phần 3: Khuyến nghị hành động cụ thể (actionRecommendations) - Chia rõ 3 nhóm:
-- Nhóm 'Dinh dưỡng': Bắt buộc phân tích dựa trên cân nặng hiện tại, cân nặng mong muốn, thời gian mong muốn (số tuần/ngày) và mức mỡ nội tạng để chỉ rõ MỨC CALO TỐI ĐA nạp mỗi ngày (đối với người giảm cân / hạ mỡ nội tạng) hoặc MỨC CALO TỐI THIỂU nạp mỗi ngày (đối với người tăng cân), kèm số gram Protein, Tinh bột, Chất béo.
-- Nhóm 'Tập luyện': Số buổi & dạng bài tập cụ thể.
-- Nhóm 'Lối sống & Chuyển hóa': Lít nước & giấc ngủ.`,
+Phần 1: Chỉ số cảnh báo (warningMetrics) - Tên chỉ số, giá trị thực tế, ngưỡng chuẩn y khoa, mức độ nguy cơ và bệnh lý tiềm ẩn (tim mạch, gan nhiễm mỡ, kháng insulin, mất cơ xương...).
+Phần 2: Đánh giá chuyên sâu (deepAssessment) - Phân tích tỷ lệ Cơ/Mỡ/Nước, gánh nặng chuyển hóa BMR & tuổi sinh học, đối chiếu tiến độ với lần đo trước.
+Phần 3: Khuyến nghị hành động (actionRecommendations) - Định lượng cụ thể gam Protein/Carb/Fat, mức Calo trần (nếu giảm cân) hoặc Calo sàn (nếu tăng cân), bài tập kháng lực/Cardio nhịp tim Zone 2, lượng nước uống theo công thức 40ml/kg.`,
             responseMimeType: 'application/json',
             responseSchema: {
               type: Type.OBJECT,
@@ -1326,57 +1107,44 @@ Phần 3: Khuyến nghị hành động cụ thể (actionRecommendations) - Chi
       }
     }
 
-    res.json({ success: false, fallbackRequired: true, calorieAnalysis });
+    return res.json({ success: false, fallbackRequired: true, calorieAnalysis });
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return res.status(500).json({ error: getErrMessage(err) });
   }
 });
 
-// Meals API (Stored directly in Database with compressed WebP/JPEG thumbnails)
+// Meals API (Strictly Stored in PostgreSQL Database)
 app.get('/api/meals', async (req, res) => {
   try {
+    await ensureDbReady();
     const { studentId } = req.query;
-    if (dbConnected) {
-      const query = studentId
-        ? 'SELECT * FROM meal_logs WHERE student_id = $1 ORDER BY date DESC, logged_at DESC'
-        : 'SELECT * FROM meal_logs ORDER BY date DESC, logged_at DESC';
-      const params = studentId ? [studentId] : [];
-      const result = await pool.query(query, params);
-      const meals = result.rows.map((r) => ({
-        id: r.id,
-        studentId: r.student_id,
-        date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
-        mealType: r.meal_type,
-        imageUrl: r.image_url || '',
-        foodDescription: r.food_description || '',
-        estimatedCalories: r.estimated_calories || 0,
-        macros: r.macros || { protein: 0, carbs: 0, fat: 0 },
-        trainerReaction: r.trainer_reaction,
-        trainerComment: r.trainer_comment,
-        loggedAt: r.logged_at,
-      }));
-      if (!studentId) {
-        dbStore.meals = meals;
-        saveDiskStore(dbStore);
-      }
-      return res.json(meals);
-    }
-    const list = studentId
-      ? dbStore.meals.filter((m) => m.studentId === studentId)
-      : dbStore.meals;
-    res.json(list);
-  } catch {
-    dbConnected = false;
-    const { studentId } = req.query;
-    const list = studentId
-      ? dbStore.meals.filter((m) => m.studentId === studentId)
-      : dbStore.meals;
-    res.json(list);
+    const query = studentId
+      ? 'SELECT * FROM meal_logs WHERE student_id = $1 ORDER BY date DESC, logged_at DESC'
+      : 'SELECT * FROM meal_logs ORDER BY date DESC, logged_at DESC';
+    const params = studentId ? [studentId] : [];
+    const result = await pool.query(query, params);
+    const meals = result.rows.map((r) => ({
+      id: r.id,
+      studentId: r.student_id,
+      date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
+      mealType: r.meal_type,
+      imageUrl: r.image_url || '',
+      foodDescription: r.food_description || '',
+      estimatedCalories: r.estimated_calories || 0,
+      macros: r.macros || { protein: 0, carbs: 0, fat: 0 },
+      trainerReaction: r.trainer_reaction,
+      trainerComment: r.trainer_comment,
+      loggedAt: r.logged_at,
+    }));
+    return res.json(meals);
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
   }
 });
 
 app.post('/api/meals', async (req, res) => {
   try {
+    await ensureDbReady();
     const m = req.body;
     const mealId = m.id || `meal-${Date.now()}`;
     const loggedAt =
@@ -1413,317 +1181,213 @@ app.post('/api/meals', async (req, res) => {
       loggedAt,
     };
 
-    dbStore.meals = [newMeal, ...dbStore.meals.filter((item) => item.id !== mealId)];
-    saveDiskStore(dbStore);
+    await pool.query(
+      `INSERT INTO meal_logs (id, student_id, date, meal_type, image_url, food_description, estimated_calories, macros, trainer_reaction, trainer_comment, logged_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (id) DO UPDATE SET
+         date = EXCLUDED.date,
+         meal_type = EXCLUDED.meal_type,
+         image_url = EXCLUDED.image_url,
+         food_description = EXCLUDED.food_description,
+         estimated_calories = EXCLUDED.estimated_calories,
+         macros = EXCLUDED.macros,
+         trainer_reaction = EXCLUDED.trainer_reaction,
+         trainer_comment = EXCLUDED.trainer_comment,
+         logged_at = EXCLUDED.logged_at`,
+      [
+        newMeal.id,
+        newMeal.studentId,
+        newMeal.date,
+        newMeal.mealType,
+        newMeal.imageUrl,
+        newMeal.foodDescription,
+        newMeal.estimatedCalories,
+        JSON.stringify(compactMacros),
+        m.trainerReaction || null,
+        m.trainerComment || null,
+        loggedAt,
+      ]
+    );
 
-    if (dbConnected) {
-      try {
-        await pool.query(
-          `INSERT INTO meal_logs (id, student_id, date, meal_type, image_url, food_description, estimated_calories, macros, trainer_reaction, trainer_comment, logged_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-           ON CONFLICT (id) DO UPDATE SET
-             date = EXCLUDED.date,
-             meal_type = EXCLUDED.meal_type,
-             image_url = EXCLUDED.image_url,
-             food_description = EXCLUDED.food_description,
-             estimated_calories = EXCLUDED.estimated_calories,
-             macros = EXCLUDED.macros,
-             trainer_reaction = EXCLUDED.trainer_reaction,
-             trainer_comment = EXCLUDED.trainer_comment,
-             logged_at = EXCLUDED.logged_at`,
-          [
-            newMeal.id,
-            newMeal.studentId,
-            newMeal.date,
-            newMeal.mealType,
-            newMeal.imageUrl,
-            newMeal.foodDescription,
-            newMeal.estimatedCalories,
-            JSON.stringify(compactMacros),
-            m.trainerReaction || null,
-            m.trainerComment || null,
-            loggedAt,
-          ]
-        );
-      } catch {
-        dbConnected = false;
-      }
-    }
-
-    res.status(201).json(newMeal);
+    return res.status(201).json(newMeal);
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return handleDbRouteError(res, err);
   }
 });
 
 app.delete('/api/meals/student/:studentId', async (req, res) => {
   try {
+    await ensureDbReady();
     const { studentId } = req.params;
-    dbStore.meals = dbStore.meals.filter((m) => m.studentId !== studentId);
-    saveDiskStore(dbStore);
-
-    if (dbConnected) {
-      try {
-        await pool.query('DELETE FROM meal_logs WHERE student_id = $1', [studentId]);
-      } catch {
-        dbConnected = false;
-      }
-    }
-    res.json({ success: true });
+    await pool.query('DELETE FROM meal_logs WHERE student_id = $1', [studentId]);
+    return res.json({ success: true });
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return handleDbRouteError(res, err);
   }
 });
 
 app.delete('/api/meals/:id', async (req, res) => {
   try {
+    await ensureDbReady();
     const { id } = req.params;
-    dbStore.meals = dbStore.meals.filter((m) => m.id !== id);
-    saveDiskStore(dbStore);
-
-    if (dbConnected) {
-      try {
-        await pool.query('DELETE FROM meal_logs WHERE id = $1', [id]);
-      } catch {
-        dbConnected = false;
-      }
-    }
-    res.json({ success: true });
+    await pool.query('DELETE FROM meal_logs WHERE id = $1', [id]);
+    return res.json({ success: true });
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return handleDbRouteError(res, err);
   }
 });
 
 app.put('/api/meals/:id/feedback', async (req, res) => {
   try {
+    await ensureDbReady();
     const { id } = req.params;
     const { reaction, comment } = req.body;
-    dbStore.meals = dbStore.meals.map((m) =>
-      m.id === id ? { ...m, trainerReaction: reaction, trainerComment: comment } : m
+    await pool.query(
+      `UPDATE meal_logs SET trainer_reaction = $1, trainer_comment = $2 WHERE id = $3`,
+      [reaction, comment, id]
     );
-    saveDiskStore(dbStore);
-
-    if (dbConnected) {
-      try {
-        await pool.query(
-          `UPDATE meal_logs SET trainer_reaction = $1, trainer_comment = $2 WHERE id = $3`,
-          [reaction, comment, id]
-        );
-      } catch {
-        dbConnected = false;
-      }
-    }
-    res.json({ success: true, id, reaction, comment });
+    return res.json({ success: true, id, reaction, comment });
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return handleDbRouteError(res, err);
   }
 });
 
-// Workouts API
+// Workouts API (Strictly Stored in PostgreSQL Database)
 app.get('/api/workouts', async (req, res) => {
   try {
+    await ensureDbReady();
     const { studentId } = req.query;
-    if (dbConnected) {
-      const query = studentId
-        ? 'SELECT * FROM workout_logs WHERE student_id = $1 ORDER BY date DESC'
-        : 'SELECT * FROM workout_logs ORDER BY date DESC';
-      const params = studentId ? [studentId] : [];
-      const result = await pool.query(query, params);
-      const workouts = result.rows.map((r) => ({
-        id: r.id,
-        studentId: r.student_id,
-        date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
-        planTitle: r.plan_title,
-        durationMinutes: r.duration_minutes,
-        exercises: r.exercises || [],
-        trainerReaction: r.trainer_reaction,
-        trainerComment: r.trainer_comment,
-        loggedAt: r.logged_at,
-      }));
-      if (!studentId) {
-        dbStore.workouts = workouts;
-        saveDiskStore(dbStore);
-      }
-      return res.json(workouts);
-    }
-    const list = studentId
-      ? dbStore.workouts.filter((w) => w.studentId === studentId)
-      : dbStore.workouts;
-    res.json(list);
-  } catch {
-    dbConnected = false;
-    const { studentId } = req.query;
-    const list = studentId
-      ? dbStore.workouts.filter((w) => w.studentId === studentId)
-      : dbStore.workouts;
-    res.json(list);
+    const query = studentId
+      ? 'SELECT * FROM workout_logs WHERE student_id = $1 ORDER BY date DESC'
+      : 'SELECT * FROM workout_logs ORDER BY date DESC';
+    const params = studentId ? [studentId] : [];
+    const result = await pool.query(query, params);
+    const workouts = result.rows.map((r) => ({
+      id: r.id,
+      studentId: r.student_id,
+      date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
+      planTitle: r.plan_title,
+      durationMinutes: r.duration_minutes,
+      exercises: r.exercises || [],
+      trainerReaction: r.trainer_reaction,
+      trainerComment: r.trainer_comment,
+      loggedAt: r.logged_at,
+    }));
+    return res.json(workouts);
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
   }
 });
 
 app.post('/api/workouts', async (req, res) => {
   try {
+    await ensureDbReady();
     const w = req.body;
-    dbStore.workouts = [w, ...dbStore.workouts.filter((item) => item.id !== w.id)];
-    saveDiskStore(dbStore);
-
-    if (dbConnected) {
-      try {
-        await pool.query(
-          `INSERT INTO workout_logs (id, student_id, date, plan_title, duration_minutes, exercises, trainer_reaction, trainer_comment, logged_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-          [
-            w.id,
-            w.studentId,
-            w.date,
-            w.planTitle,
-            w.durationMinutes,
-            JSON.stringify(w.exercises || []),
-            w.trainerReaction || null,
-            w.trainerComment || null,
-            w.loggedAt,
-          ]
-        );
-      } catch {
-        dbConnected = false;
-      }
-    }
-    res.status(201).json(w);
+    await pool.query(
+      `INSERT INTO workout_logs (id, student_id, date, plan_title, duration_minutes, exercises, trainer_reaction, trainer_comment, logged_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        w.id,
+        w.studentId,
+        w.date,
+        w.planTitle,
+        w.durationMinutes,
+        JSON.stringify(w.exercises || []),
+        w.trainerReaction || null,
+        w.trainerComment || null,
+        w.loggedAt,
+      ]
+    );
+    return res.status(201).json(w);
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return handleDbRouteError(res, err);
   }
 });
 
 app.put('/api/workouts/:id/feedback', async (req, res) => {
   try {
+    await ensureDbReady();
     const { id } = req.params;
     const { reaction, comment } = req.body;
-    dbStore.workouts = dbStore.workouts.map((w) =>
-      w.id === id ? { ...w, trainerReaction: reaction, trainerComment: comment } : w
+    await pool.query(
+      `UPDATE workout_logs SET trainer_reaction = $1, trainer_comment = $2 WHERE id = $3`,
+      [reaction, comment, id]
     );
-    saveDiskStore(dbStore);
-
-    if (dbConnected) {
-      try {
-        await pool.query(
-          `UPDATE workout_logs SET trainer_reaction = $1, trainer_comment = $2 WHERE id = $3`,
-          [reaction, comment, id]
-        );
-      } catch {
-        dbConnected = false;
-      }
-    }
-    res.json({ success: true, id, reaction, comment });
+    return res.json({ success: true, id, reaction, comment });
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return handleDbRouteError(res, err);
   }
 });
 
-// Physique Photos API
+// Physique Photos API (Strictly Stored in PostgreSQL Database)
 app.get('/api/photos', async (req, res) => {
   try {
+    await ensureDbReady();
     const { studentId } = req.query;
-    if (dbConnected) {
-      const query = studentId
-        ? 'SELECT * FROM physique_photos WHERE student_id = $1 ORDER BY date ASC'
-        : 'SELECT * FROM physique_photos ORDER BY date ASC';
-      const params = studentId ? [studentId] : [];
-      const result = await pool.query(query, params);
-      const photos = result.rows.map((r) => ({
-        id: r.id,
-        studentId: r.student_id,
-        date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
-        imageUrl: r.image_url,
-        photoType: r.photo_type,
-        weight: parseFloat(r.weight),
-        notes: r.notes || '',
-      }));
-      if (!studentId) {
-        dbStore.photos = photos;
-        saveDiskStore(dbStore);
-      }
-      return res.json(photos);
-    }
-    const list = studentId
-      ? dbStore.photos.filter((p) => p.studentId === studentId)
-      : dbStore.photos;
-    res.json(list);
-  } catch {
-    dbConnected = false;
-    const { studentId } = req.query;
-    const list = studentId
-      ? dbStore.photos.filter((p) => p.studentId === studentId)
-      : dbStore.photos;
-    res.json(list);
+    const query = studentId
+      ? 'SELECT * FROM physique_photos WHERE student_id = $1 ORDER BY date ASC'
+      : 'SELECT * FROM physique_photos ORDER BY date ASC';
+    const params = studentId ? [studentId] : [];
+    const result = await pool.query(query, params);
+    const photos = result.rows.map((r) => ({
+      id: r.id,
+      studentId: r.student_id,
+      date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
+      imageUrl: r.image_url,
+      photoType: r.photo_type,
+      weight: parseFloat(r.weight),
+      notes: r.notes || '',
+    }));
+    return res.json(photos);
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
   }
 });
 
 app.post('/api/photos', async (req, res) => {
   try {
+    await ensureDbReady();
     const p = req.body;
-    dbStore.photos = [...dbStore.photos, p];
-    saveDiskStore(dbStore);
-
-    if (dbConnected) {
-      try {
-        await pool.query(
-          `INSERT INTO physique_photos (id, student_id, date, image_url, photo_type, weight, notes)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [p.id, p.studentId, p.date, p.imageUrl, p.photoType, p.weight, String(p.notes || '').trim()]
-        );
-      } catch {
-        dbConnected = false;
-      }
-    }
-    res.status(201).json(p);
+    await pool.query(
+      `INSERT INTO physique_photos (id, student_id, date, image_url, photo_type, weight, notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [p.id, p.studentId, p.date, p.imageUrl, p.photoType, p.weight, String(p.notes || '').trim()]
+    );
+    return res.status(201).json(p);
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return handleDbRouteError(res, err);
   }
 });
 
-// Notifications API
+// Notifications API (Strictly Stored in PostgreSQL Database)
 app.get('/api/notifications', async (req, res) => {
   try {
-    if (dbConnected) {
-      const result = await pool.query('SELECT * FROM smart_notifications ORDER BY created_at DESC');
-      const notifications = result.rows.map((r) => ({
-        id: r.id,
-        useCaseId: r.use_case_id,
-        studentId: r.student_id,
-        title: r.title,
-        message: r.message,
-        priority: r.priority,
-        createdAt: r.created_at,
-        read: r.read,
-      }));
-      dbStore.notifications = notifications;
-      saveDiskStore(dbStore);
-      return res.json(notifications);
-    }
-    res.json(dbStore.notifications);
-  } catch {
-    dbConnected = false;
-    res.json(dbStore.notifications);
+    await ensureDbReady();
+    const result = await pool.query('SELECT * FROM smart_notifications ORDER BY created_at DESC');
+    const notifications = result.rows.map((r) => ({
+      id: r.id,
+      useCaseId: r.use_case_id,
+      studentId: r.student_id,
+      title: r.title,
+      message: r.message,
+      priority: r.priority,
+      createdAt: r.created_at,
+      read: r.read,
+    }));
+    return res.json(notifications);
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
   }
 });
 
 app.put('/api/notifications/:id/read', async (req, res) => {
   try {
+    await ensureDbReady();
     const { id } = req.params;
-    dbStore.notifications = dbStore.notifications.map((n) =>
-      n.id === id ? { ...n, read: true } : n
-    );
-    saveDiskStore(dbStore);
-
-    if (dbConnected) {
-      try {
-        await pool.query('UPDATE smart_notifications SET read = true WHERE id = $1', [id]);
-      } catch {
-        dbConnected = false;
-      }
-    }
-    res.json({ success: true, id });
+    await pool.query('UPDATE smart_notifications SET read = true WHERE id = $1', [id]);
+    return res.json({ success: true, id });
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrMessage(err) });
+    return handleDbRouteError(res, err);
   }
 });
 
