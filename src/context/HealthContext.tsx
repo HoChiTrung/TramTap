@@ -22,6 +22,7 @@ import {
   generateInstantAIAdvice,
   detectAnomalies,
 } from '../utils/healthCalculations';
+import { apiUrl } from '../utils/api';
 
 interface HealthContextType {
   // Authentication & Accounts
@@ -262,7 +263,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const fetchUsersList = useCallback(async () => {
     try {
-      const res = await fetch('/api/users');
+      const res = await fetch(apiUrl('/api/users'));
       if (res.ok) {
         const list = await res.json();
         if (Array.isArray(list)) {
@@ -284,7 +285,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Load all data directly from PostgreSQL database API (Never from local storage)
   const refreshDatabase = useCallback(async () => {
     try {
-      const healthCheck = await fetch('/api/health').catch(() => null);
+      const healthCheck = await fetch(apiUrl('/api/health')).catch(() => null);
       if (!healthCheck) {
         setDbStatus({
           connected: false,
@@ -317,14 +318,14 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setDbError(null);
 
       const [resU, resS, resM, resA, resMeals, resW, resP, resN] = await Promise.allSettled([
-        fetch('/api/users').then((r) => (r.ok ? r.json() : Promise.reject(r))),
-        fetch('/api/students').then((r) => (r.ok ? r.json() : Promise.reject(r))),
-        fetch('/api/metrics').then((r) => (r.ok ? r.json() : Promise.reject(r))),
-        fetch('/api/advices').then((r) => (r.ok ? r.json() : Promise.reject(r))),
-        fetch('/api/meals').then((r) => (r.ok ? r.json() : Promise.reject(r))),
-        fetch('/api/workouts').then((r) => (r.ok ? r.json() : Promise.reject(r))),
-        fetch('/api/photos').then((r) => (r.ok ? r.json() : Promise.reject(r))),
-        fetch('/api/notifications').then((r) => (r.ok ? r.json() : Promise.reject(r))),
+        fetch(apiUrl('/api/users')).then((r) => (r.ok ? r.json() : Promise.reject(r))),
+        fetch(apiUrl('/api/students')).then((r) => (r.ok ? r.json() : Promise.reject(r))),
+        fetch(apiUrl('/api/metrics')).then((r) => (r.ok ? r.json() : Promise.reject(r))),
+        fetch(apiUrl('/api/advices')).then((r) => (r.ok ? r.json() : Promise.reject(r))),
+        fetch(apiUrl('/api/meals')).then((r) => (r.ok ? r.json() : Promise.reject(r))),
+        fetch(apiUrl('/api/workouts')).then((r) => (r.ok ? r.json() : Promise.reject(r))),
+        fetch(apiUrl('/api/photos')).then((r) => (r.ok ? r.json() : Promise.reject(r))),
+        fetch(apiUrl('/api/notifications')).then((r) => (r.ok ? r.json() : Promise.reject(r))),
       ]);
 
       if (resU.status === 'fulfilled' && Array.isArray(resU.value)) {
@@ -374,7 +375,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Login handler against PostgreSQL Database
   const login = async (username: string, pass: string) => {
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await fetch(apiUrl('/api/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password: pass }),
@@ -426,7 +427,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // User Accounts CRUD in PostgreSQL Database (No local memory fallback)
   const createUserAccount: HealthContextType['createUserAccount'] = async (params) => {
     try {
-      const res = await fetch('/api/users', {
+      const res = await fetch(apiUrl('/api/users'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
@@ -452,7 +453,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const updateUserAccount: HealthContextType['updateUserAccount'] = async (id, params) => {
     try {
-      const res = await fetch(`/api/users/${id}`, {
+      const res = await fetch(apiUrl(`/api/users/${id}`), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
@@ -469,7 +470,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       await fetchUsersList();
       // If trainer name changed, refresh students to reflect new trainerName
       if (params.fullName) {
-        const resS = await fetch('/api/students');
+        const resS = await fetch(apiUrl('/api/students'));
         if (resS.ok) {
           const sList = await resS.json();
           if (Array.isArray(sList)) setAllStudents(sList);
@@ -485,7 +486,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const deleteUserAccount: HealthContextType['deleteUserAccount'] = async (id) => {
     try {
-      const res = await fetch(`/api/users/${id}`, { method: 'DELETE' });
+      const res = await fetch(apiUrl(`/api/users/${id}`), { method: 'DELETE' });
       if (!res.ok) {
         const errMsg = await handleApiErrorResponse(
           res,
@@ -579,7 +580,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     let res: Response;
     try {
-      res = await fetch('/api/students', {
+      res = await fetch(apiUrl('/api/students'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -618,7 +619,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const updateStudent = async (student: StudentProfile) => {
     let res: Response;
     try {
-      res = await fetch(`/api/students/${student.id}`, {
+      res = await fetch(apiUrl(`/api/students/${student.id}`), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(student),
@@ -663,7 +664,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           aiDraftContent: updatedContent,
           trainerEditedContent: updatedContent.summary,
         };
-        const advRes = await fetch(`/api/advices/${existingAdvice.id}`, {
+        const advRes = await fetch(apiUrl(`/api/advices/${existingAdvice.id}`), {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(updatedAdvice),
@@ -681,7 +682,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const deleteStudent = async (id: string) => {
     let res: Response;
     try {
-      res = await fetch(`/api/students/${id}`, { method: 'DELETE' });
+      res = await fetch(apiUrl(`/api/students/${id}`), { method: 'DELETE' });
     } catch {
       setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
       setDbError(DEFAULT_DB_DISCONNECTED_MSG);
@@ -724,7 +725,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     let res: Response;
     try {
-      res = await fetch('/api/metrics', {
+      res = await fetch(apiUrl('/api/metrics'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newRecord),
@@ -765,7 +766,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         approvedAt: new Date().toLocaleString('vi-VN'),
       };
 
-      const advRes = await fetch('/api/advices', {
+      const advRes = await fetch(apiUrl('/api/advices'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newAdvice),
@@ -776,7 +777,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
 
       // Request Gemini AI 3-part health analysis and update DB record
-      fetch('/api/ai/analyze-health', {
+      fetch(apiUrl('/api/ai/analyze-health'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -793,7 +794,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               aiDraftContent: aiData.analysis,
               trainerEditedContent: aiData.analysis.summary,
             };
-            fetch(`/api/advices/${newAdvice.id}`, {
+            fetch(apiUrl(`/api/advices/${newAdvice.id}`), {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(enrichedAdvice),
@@ -831,7 +832,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const deleteMetricRecord = async (id: string) => {
     let res: Response;
     try {
-      res = await fetch(`/api/metrics/${id}`, { method: 'DELETE' });
+      res = await fetch(apiUrl(`/api/metrics/${id}`), { method: 'DELETE' });
     } catch {
       setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
       setDbError(DEFAULT_DB_DISCONNECTED_MSG);
@@ -863,7 +864,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     let res: Response;
     try {
-      res = await fetch('/api/meals', {
+      res = await fetch(apiUrl('/api/meals'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newMeal),
@@ -892,7 +893,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   ) => {
     let res: Response;
     try {
-      res = await fetch(`/api/meals/${id}/feedback`, {
+      res = await fetch(apiUrl(`/api/meals/${id}/feedback`), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reaction, comment }),
@@ -938,7 +939,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (isEmptySlot) {
       let delRes: Response;
       try {
-        delRes = await fetch(`/api/meals/${ticketId}`, { method: 'DELETE' });
+        delRes = await fetch(apiUrl(`/api/meals/${ticketId}`), { method: 'DELETE' });
       } catch {
         setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
         setDbError(DEFAULT_DB_DISCONNECTED_MSG);
@@ -989,7 +990,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     let res: Response;
     try {
-      res = await fetch('/api/meals', {
+      res = await fetch(apiUrl('/api/meals'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newTicket),
@@ -1017,7 +1018,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const resetStudentMealTickets = async (studentId: string) => {
     let res: Response;
     try {
-      res = await fetch(`/api/meals/student/${studentId}`, { method: 'DELETE' });
+      res = await fetch(apiUrl(`/api/meals/student/${studentId}`), { method: 'DELETE' });
     } catch {
       setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
       setDbError(DEFAULT_DB_DISCONNECTED_MSG);
@@ -1047,7 +1048,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     let res: Response;
     try {
-      res = await fetch('/api/workouts', {
+      res = await fetch(apiUrl('/api/workouts'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newWorkout),
@@ -1076,7 +1077,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   ) => {
     let res: Response;
     try {
-      res = await fetch(`/api/workouts/${id}/feedback`, {
+      res = await fetch(apiUrl(`/api/workouts/${id}/feedback`), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reaction, comment }),
@@ -1110,7 +1111,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     let res: Response;
     try {
-      res = await fetch('/api/photos', {
+      res = await fetch(apiUrl('/api/photos'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newPhoto),
@@ -1133,7 +1134,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   // Mark notification read
   const markNotificationRead = async (id: string) => {
-    const res = await fetch(`/api/notifications/${id}/read`, { method: 'PUT' }).catch(() => null);
+    const res = await fetch(apiUrl(`/api/notifications/${id}/read`), { method: 'PUT' }).catch(() => null);
     if (res && res.ok) {
       setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
     }

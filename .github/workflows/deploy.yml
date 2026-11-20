@@ -73,6 +73,8 @@ jobs:
         run: npm install --legacy-peer-deps
 
       - name: Build static site with Vite
+        env:
+          VITE_API_BASE_URL: https://tramtap.onrender.com
         run: |
           npx vite build --base=./
           cp dist/index.html dist/404.html
