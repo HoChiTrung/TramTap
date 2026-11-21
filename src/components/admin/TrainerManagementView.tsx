@@ -6,6 +6,7 @@
 import React, { useState } from 'react';
 import { useHealth } from '../../context/HealthContext';
 import { UserAccount } from '../../types/health';
+import { DISCOUNT_TIERS } from '../../types/tuition';
 import {
   ShieldCheck,
   UserPlus,
@@ -38,6 +39,7 @@ export const TrainerManagementView: React.FC = () => {
   const [password, setPassword] = useState('123');
   const [phone, setPhone] = useState('');
   const [accountRole, setAccountRole] = useState<'trainer' | 'admin'>('trainer');
+  const [discountTier, setDiscountTier] = useState<number>(50);
   const [formMsg, setFormMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isCreating, setIsCreating] = useState(false);
 
@@ -47,10 +49,24 @@ export const TrainerManagementView: React.FC = () => {
   const [editUsername, setEditUsername] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editPassword, setEditPassword] = useState('');
+  const [editDiscountTier, setEditDiscountTier] = useState<number>(50);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [selectedTrainerFilter, setSelectedTrainerFilter] = useState<string>('ALL');
 
   const trainerAccounts = users.filter((u) => u.role === 'trainer' || u.role === 'admin');
   const studentAccounts = users.filter((u) => u.role === 'student');
+  const unassignedStudentsCount = allStudents.filter(
+    (s) => !s.trainerId || !trainerAccounts.some((tr) => tr.id === s.trainerId)
+  ).length;
+  const filteredAssignmentStudents =
+    selectedTrainerFilter === 'ALL'
+      ? allStudents
+      : selectedTrainerFilter === 'UNASSIGNED'
+      ? allStudents.filter(
+          (s) => !s.trainerId || !trainerAccounts.some((tr) => tr.id === s.trainerId)
+        )
+      : allStudents.filter((s) => s.trainerId === selectedTrainerFilter);
+  const inspectedTrainer = trainerAccounts.find((t) => t.id === selectedTrainerFilter) || null;
 
   const handleCreateTrainer = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -67,6 +83,7 @@ export const TrainerManagementView: React.FC = () => {
       password: password.trim(),
       phone: phone.trim(),
       role: accountRole,
+      discountTier,
     });
     setIsCreating(false);
 
@@ -75,6 +92,7 @@ export const TrainerManagementView: React.FC = () => {
       setUsername('');
       setPassword('123');
       setPhone('');
+      setDiscountTier(50);
       setFormMsg({
         type: 'success',
         text: `Đã tạo tài khoản ${accountRole === 'admin' ? 'Admin' : 'Huấn Luyện Viên'} lưu vào Database thành công!`,
@@ -90,6 +108,7 @@ export const TrainerManagementView: React.FC = () => {
     setEditUsername(u.username);
     setEditPhone(u.phone || '');
     setEditPassword('');
+    setEditDiscountTier(u.discountTier ?? 50);
   };
 
   const handleSaveEditUser = async (e: React.FormEvent) => {
@@ -100,6 +119,7 @@ export const TrainerManagementView: React.FC = () => {
       username: editUsername.trim(),
       phone: editPhone.trim(),
       password: editPassword.trim() ? editPassword.trim() : undefined,
+      discountTier: editingUser.role !== 'student' ? editDiscountTier : undefined,
     });
     if (res.success) {
       setEditingUser(null);
@@ -244,6 +264,23 @@ export const TrainerManagementView: React.FC = () => {
               </div>
             </div>
 
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">
+                Mức chiết khấu Herbalife mặc định
+              </label>
+              <select
+                value={discountTier}
+                onChange={(e) => setDiscountTier(Number(e.target.value))}
+                className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-hidden font-bold font-mono text-slate-800"
+              >
+                {DISCOUNT_TIERS.map((tier) => (
+                  <option key={tier} value={tier}>
+                    {tier === 0 ? '0% (Giá bán lẻ)' : `Chiết khấu ${tier}%`}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {formMsg && (
               <div
                 className={`p-2.5 rounded-xl border text-xs font-semibold ${
@@ -295,7 +332,7 @@ export const TrainerManagementView: React.FC = () => {
                 >
                   {isEditingThis ? (
                     <form onSubmit={handleSaveEditUser} className="space-y-2.5">
-                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
                         <div>
                           <label className="text-[10px] font-bold text-slate-500">Họ và tên</label>
                           <input
@@ -326,12 +363,26 @@ export const TrainerManagementView: React.FC = () => {
                           />
                         </div>
                         <div>
+                          <label className="text-[10px] font-bold text-slate-500">Mức CK Herbalife</label>
+                          <select
+                            value={editDiscountTier}
+                            onChange={(e) => setEditDiscountTier(Number(e.target.value))}
+                            className="w-full mt-0.5 px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg font-mono font-bold"
+                          >
+                            {DISCOUNT_TIERS.map((tier) => (
+                              <option key={tier} value={tier}>
+                                {tier}%
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
                           <label className="text-[10px] font-bold text-slate-500">
-                            Đổi mật khẩu (Để trống nếu giữ nguyên)
+                            Đổi mật khẩu (Để trống nếu giữ)
                           </label>
                           <input
                             type="text"
-                            placeholder="Nhập mật khẩu mới..."
+                            placeholder="Mật khẩu mới..."
                             value={editPassword}
                             onChange={(e) => setEditPassword(e.target.value)}
                             className="w-full mt-0.5 px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg font-mono"
@@ -375,6 +426,9 @@ export const TrainerManagementView: React.FC = () => {
                           <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 font-mono text-[11px] text-slate-700">
                             TK: <strong>{acc.username}</strong>
                           </span>
+                          <span className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 font-mono text-[11px] font-bold text-slate-700">
+                            CK {acc.discountTier ?? 50}%
+                          </span>
                           {acc.phone && (
                             <span className="text-slate-500 flex items-center text-[11px]">
                               <Phone className="w-3 h-3 mr-1" />
@@ -392,7 +446,25 @@ export const TrainerManagementView: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="flex items-center space-x-1.5 shrink-0">
+                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSelectedTrainerFilter(
+                              selectedTrainerFilter === acc.id ? 'ALL' : acc.id
+                            )
+                          }
+                          className={`px-2.5 py-1.5 rounded-xl font-extrabold border transition-colors flex items-center space-x-1 cursor-pointer ${
+                            selectedTrainerFilter === acc.id
+                              ? 'bg-emerald-600 text-white border-emerald-600'
+                              : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200'
+                          }`}
+                          title="Lọc xem danh sách học viên của HLV này bên dưới"
+                        >
+                          <Users className="w-3.5 h-3.5" />
+                          <span>{managedStudents.length} học viên</span>
+                        </button>
+
                         <button
                           type="button"
                           onClick={() => startEditUser(acc)}
@@ -448,24 +520,62 @@ export const TrainerManagementView: React.FC = () => {
 
       {/* Section 2: Student-to-Trainer Assignment & Student Login Accounts */}
       <div className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-slate-200/90 shadow-xs space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-100">
           <div className="flex items-center space-x-2">
-            <UserCheck className="w-5 h-5 text-indigo-600" />
+            <UserCheck className="w-5 h-5 text-indigo-600 shrink-0" />
             <div>
               <h3 className="font-extrabold text-slate-900 text-sm">
-                Phân Công Học Viên Cho Huấn Luyện Viên &amp; Tài Khoản Học Viên ({allStudents.length})
+                Phân Công Học Viên Theo HLV ({filteredAssignmentStudents.length}/{allStudents.length})
               </h3>
               <p className="text-[11px] text-slate-500">
-                Quản lý rõ học viên nào thuộc HLV nào phụ trách và tài khoản đăng nhập Cổng Học Viên trong Database
+                {inspectedTrainer
+                  ? `Đang lọc theo HLV ${inspectedTrainer.fullName} (@${inspectedTrainer.username}) — Tổng cộng ${filteredAssignmentStudents.length} học viên`
+                  : selectedTrainerFilter === 'UNASSIGNED'
+                  ? `Đang lọc các học viên chưa gán HLV — Tổng cộng ${filteredAssignmentStudents.length} học viên`
+                  : 'Chọn một HLV bất kỳ để xem số lượng & danh sách học viên thuộc phụ trách của HLV đó'}
               </p>
             </div>
           </div>
+
+          <div className="flex items-center gap-2 text-xs">
+            <select
+              value={selectedTrainerFilter}
+              onChange={(e) => setSelectedTrainerFilter(e.target.value)}
+              className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 outline-hidden focus:ring-2 focus:ring-emerald-500"
+            >
+              <option value="ALL">Tất cả HLV ({allStudents.length} học viên)</option>
+              {trainerAccounts.map((tr) => {
+                const count = allStudents.filter((s) => s.trainerId === tr.id).length;
+                return (
+                  <option key={tr.id} value={tr.id}>
+                    {tr.fullName} (@{tr.username}) — {count} học viên
+                  </option>
+                );
+              })}
+              {unassignedStudentsCount > 0 && (
+                <option value="UNASSIGNED">
+                  Chưa gán HLV — {unassignedStudentsCount} học viên
+                </option>
+              )}
+            </select>
+            {selectedTrainerFilter !== 'ALL' && (
+              <button
+                type="button"
+                onClick={() => setSelectedTrainerFilter('ALL')}
+                className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold cursor-pointer whitespace-nowrap"
+              >
+                Hiện tất cả
+              </button>
+            )}
+          </div>
         </div>
 
-        {allStudents.length === 0 ? (
+        {filteredAssignmentStudents.length === 0 ? (
           <div className="py-10 text-center text-xs text-slate-400">
             <Users className="w-8 h-8 text-slate-300 mx-auto mb-1.5" />
-            Chưa có hồ sơ học viên nào trong Database.
+            {selectedTrainerFilter === 'ALL'
+              ? 'Chưa có hồ sơ học viên nào trong Database.'
+              : 'HLV này hiện chưa phụ trách học viên nào.'}
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -480,7 +590,7 @@ export const TrainerManagementView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {allStudents.map((st) => {
+                {filteredAssignmentStudents.map((st) => {
                   const stUser = studentAccounts.find((u) => u.studentId === st.id);
                   const isEditingStUser = stUser && editingUser?.id === stUser.id;
 

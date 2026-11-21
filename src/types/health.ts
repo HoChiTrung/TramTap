@@ -103,6 +103,7 @@ export interface AuthUser {
   studentId?: string;
   trainerId?: string;
   avatarUrl?: string;
+  discountTier?: number;
 }
 
 export interface UserAccount {
@@ -115,6 +116,7 @@ export interface UserAccount {
   studentId?: string | null;
   trainerId?: string | null;
   trainerName?: string;
+  discountTier?: number;
   createdAt?: string;
 }
 

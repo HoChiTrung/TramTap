@@ -33,12 +33,33 @@ export const StudentList: React.FC<StudentListProps> = ({ onSelectStudent }) => 
     canCreateStudent,
     currentUser,
     isAdmin,
+    trainers,
   } = useHealth();
   const [searchTerm, setSearchTerm] = useState('');
+  const [trainerFilter, setTrainerFilter] = useState<string>('ALL');
   const [genderFilter, setGenderFilter] = useState<string>('ALL');
   const [alertFilter, setAlertFilter] = useState<'ALL' | 'HAS_ALERT' | 'HIGH_SCORE'>('ALL');
   const [showAddModal, setShowAddModal] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  // Admin: compute student counts per trainer
+  const trainerStats = useMemo(() => {
+    if (!isAdmin) return { list: [], unassignedCount: 0 };
+    const list = trainers.map((tr) => ({
+      trainer: tr,
+      count: students.filter((s) => s.trainerId === tr.id).length,
+    }));
+    const assignedIds = new Set(trainers.map((t) => t.id));
+    const unassignedCount = students.filter(
+      (s) => !s.trainerId || !assignedIds.has(s.trainerId)
+    ).length;
+    return { list, unassignedCount };
+  }, [isAdmin, trainers, students]);
+
+  const activeTrainerStat = useMemo(() => {
+    if (trainerFilter === 'ALL' || trainerFilter === 'UNASSIGNED') return null;
+    return trainerStats.list.find((t) => t.trainer.id === trainerFilter) || null;
+  }, [trainerFilter, trainerStats.list]);
 
   // Compute student stats with score & anomalies
   const studentsWithStats = useMemo(() => {
@@ -59,12 +80,22 @@ export const StudentList: React.FC<StudentListProps> = ({ onSelectStudent }) => 
 
   // Filtered List
   const filtered = useMemo(() => {
+    const validTrainerIds = new Set(trainers.map((t) => t.id));
     return studentsWithStats.filter(({ student: s, healthScore, anomalies }) => {
       const matchSearch =
         s.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
         s.phone.includes(searchTerm) ||
         s.healthGoal.toLowerCase().includes(searchTerm.toLowerCase()) ||
         (s.trainerName || '').toLowerCase().includes(searchTerm.toLowerCase());
+
+      let matchTrainer = true;
+      if (isAdmin && trainerFilter !== 'ALL') {
+        if (trainerFilter === 'UNASSIGNED') {
+          matchTrainer = !s.trainerId || !validTrainerIds.has(s.trainerId);
+        } else {
+          matchTrainer = s.trainerId === trainerFilter;
+        }
+      }
 
       const matchGender = genderFilter === 'ALL' || s.gender === genderFilter;
 
@@ -75,9 +106,9 @@ export const StudentList: React.FC<StudentListProps> = ({ onSelectStudent }) => 
         matchAlert = (healthScore?.totalScore || 0) >= 80;
       }
 
-      return matchSearch && matchGender && matchAlert;
+      return matchSearch && matchTrainer && matchGender && matchAlert;
     });
-  }, [studentsWithStats, searchTerm, genderFilter, alertFilter]);
+  }, [studentsWithStats, searchTerm, trainerFilter, isAdmin, trainers, genderFilter, alertFilter]);
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -114,6 +145,163 @@ export const StudentList: React.FC<StudentListProps> = ({ onSelectStudent }) => 
           )}
         </div>
       </div>
+
+      {/* Admin Only: Student Count Breakdown by Trainer */}
+      {isAdmin && trainerStats.list.length > 0 && (
+        <div className="bg-white rounded-2xl p-3.5 sm:p-4 border border-slate-200/90 shadow-xs space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center space-x-2">
+              <UserCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+              <h2 className="text-xs sm:text-sm font-extrabold text-slate-900">
+                Thống Kê Số Lượng Học Viên Theo Huấn Luyện Viên
+              </h2>
+            </div>
+
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-slate-500 font-medium whitespace-nowrap">Chọn nhanh HLV:</span>
+              <select
+                value={trainerFilter}
+                onChange={(e) => setTrainerFilter(e.target.value)}
+                className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 outline-hidden focus:ring-2 focus:ring-emerald-500"
+              >
+                <option value="ALL">Tất cả HLV ({students.length} học viên)</option>
+                {trainerStats.list.map(({ trainer, count }) => (
+                  <option key={trainer.id} value={trainer.id}>
+                    {trainer.fullName} (@{trainer.username}) — {count} học viên
+                  </option>
+                ))}
+                {trainerStats.unassignedCount > 0 && (
+                  <option value="UNASSIGNED">
+                    Chưa gán HLV — {trainerStats.unassignedCount} học viên
+                  </option>
+                )}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+            <button
+              type="button"
+              onClick={() => setTrainerFilter('ALL')}
+              className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between gap-2 ${
+                trainerFilter === 'ALL'
+                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+              }`}
+            >
+              <div className="min-w-0">
+                <div className="text-xs font-bold truncate">Tất cả HLV</div>
+                <div
+                  className={`text-[10px] truncate ${
+                    trainerFilter === 'ALL' ? 'text-emerald-100' : 'text-slate-400'
+                  }`}
+                >
+                  Toàn hệ thống
+                </div>
+              </div>
+              <span
+                className={`px-2 py-0.5 rounded-lg text-xs font-black shrink-0 ${
+                  trainerFilter === 'ALL'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-white text-emerald-700 border border-slate-200'
+                }`}
+              >
+                {students.length}
+              </span>
+            </button>
+
+            {trainerStats.list.map(({ trainer, count }) => {
+              const active = trainerFilter === trainer.id;
+              return (
+                <button
+                  key={trainer.id}
+                  type="button"
+                  onClick={() => setTrainerFilter(active ? 'ALL' : trainer.id)}
+                  className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between gap-2 ${
+                    active
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                      : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold truncate">{trainer.fullName}</div>
+                    <div
+                      className={`text-[10px] font-mono truncate ${
+                        active ? 'text-emerald-100' : 'text-slate-400'
+                      }`}
+                    >
+                      @{trainer.username}
+                    </div>
+                  </div>
+                  <span
+                    className={`px-2 py-0.5 rounded-lg text-xs font-black shrink-0 ${
+                      active
+                        ? 'bg-white/20 text-white'
+                        : 'bg-white text-emerald-700 border border-slate-200'
+                    }`}
+                  >
+                    {count} HV
+                  </span>
+                </button>
+              );
+            })}
+
+            {trainerStats.unassignedCount > 0 && (
+              <button
+                type="button"
+                onClick={() =>
+                  setTrainerFilter(trainerFilter === 'UNASSIGNED' ? 'ALL' : 'UNASSIGNED')
+                }
+                className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between gap-2 ${
+                  trainerFilter === 'UNASSIGNED'
+                    ? 'bg-amber-500 text-white border-amber-500 shadow-xs'
+                    : 'bg-amber-50/70 hover:bg-amber-100/70 text-amber-900 border-amber-200'
+                }`}
+              >
+                <div className="min-w-0">
+                  <div className="text-xs font-bold truncate">Chưa gán HLV</div>
+                  <div
+                    className={`text-[10px] truncate ${
+                      trainerFilter === 'UNASSIGNED' ? 'text-amber-100' : 'text-amber-700/70'
+                    }`}
+                  >
+                    Cần phân công
+                  </div>
+                </div>
+                <span
+                  className={`px-2 py-0.5 rounded-lg text-xs font-black shrink-0 ${
+                    trainerFilter === 'UNASSIGNED'
+                      ? 'bg-white/20 text-white'
+                      : 'bg-white text-amber-700 border border-amber-200'
+                  }`}
+                >
+                  {trainerStats.unassignedCount} HV
+                </span>
+              </button>
+            )}
+          </div>
+
+          {activeTrainerStat && (
+            <div className="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-xs flex flex-wrap items-center justify-between gap-2">
+              <span className="text-emerald-950 font-semibold">
+                HLV <strong>{activeTrainerStat.trainer.fullName}</strong> (@
+                {activeTrainerStat.trainer.username}) hiện đang phụ trách{' '}
+                <strong className="text-emerald-700 text-sm">
+                  {activeTrainerStat.count} học viên
+                </strong>
+                .
+              </span>
+              <button
+                type="button"
+                onClick={() => setTrainerFilter('ALL')}
+                className="text-emerald-700 hover:text-emerald-900 font-bold cursor-pointer"
+              >
+                Xem lại tất cả HLV
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Search & Filter Bar */}
       <div className="bg-white rounded-2xl p-3.5 sm:p-4 border border-slate-200/90 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">

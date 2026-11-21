@@ -12,6 +12,7 @@ import { StudentDetailView } from './components/trainer/StudentDetailView';
 import { StudentPortal } from './components/student/StudentPortal';
 import { NutritionTicketManager } from './components/nutrition/NutritionTicketManager';
 import { TrainerManagementView } from './components/admin/TrainerManagementView';
+import { TuitionDashboardView } from './components/tuition/TuitionDashboardView';
 import { PrintableReportModal } from './components/reports/PrintableReportModal';
 import { ReferenceStandardsModal } from './components/common/ReferenceStandardsModal';
 import {
@@ -19,6 +20,7 @@ import {
   ShieldCheck,
   BookOpen,
   Utensils,
+  Wallet,
   AlertTriangle,
   RefreshCw,
   X,
@@ -39,8 +41,9 @@ const MainApp: React.FC = () => {
   } = useHealth();
 
   const [trainerSubView, setTrainerSubView] = useState<
-    'directory' | 'detail' | 'nutrition' | 'trainers'
+    'directory' | 'detail' | 'nutrition' | 'tuition' | 'trainers'
   >('directory');
+  const [adminSubView, setAdminSubView] = useState<'trainers' | 'tuition'>('trainers');
   const [isReconnecting, setIsReconnecting] = useState(false);
 
   const handleRetryDb = async () => {
@@ -104,59 +107,97 @@ const MainApp: React.FC = () => {
             {/* Trainer / Admin Uniform Sub-Navigation Bar */}
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 mb-4 sm:mb-5 bg-white p-2.5 sm:p-3 rounded-2xl border border-slate-200/90 shadow-2xs no-print">
               <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 text-xs min-w-0">
-                <button
-                  onClick={() => setTrainerSubView('directory')}
-                  className={`h-9 px-3.5 rounded-xl font-bold transition-all inline-flex items-center justify-center space-x-1.5 cursor-pointer border whitespace-nowrap ${
-                    trainerSubView === 'directory' || trainerSubView === 'detail'
-                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                      : 'bg-slate-50 text-slate-700 border-slate-200/90 hover:bg-slate-100 hover:text-slate-900'
-                  }`}
-                >
-                  <Users className="w-4 h-4 shrink-0" />
-                  <span>Danh Sách Học Viên</span>
-                </button>
+                {!isAdmin && (
+                  <>
+                    <button
+                      onClick={() => setTrainerSubView('directory')}
+                      className={`h-9 px-3.5 rounded-xl font-bold transition-all inline-flex items-center justify-center space-x-1.5 cursor-pointer border whitespace-nowrap ${
+                        trainerSubView === 'directory' || trainerSubView === 'detail'
+                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                          : 'bg-slate-50 text-slate-700 border-slate-200/90 hover:bg-slate-100 hover:text-slate-900'
+                      }`}
+                    >
+                      <Users className="w-4 h-4 shrink-0" />
+                      <span>Danh Sách Học Viên</span>
+                    </button>
 
-                <button
-                  onClick={() => setTrainerSubView('nutrition')}
-                  className={`h-9 px-3.5 rounded-xl font-bold transition-all inline-flex items-center justify-center space-x-1.5 cursor-pointer border whitespace-nowrap ${
-                    trainerSubView === 'nutrition'
-                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                      : 'bg-slate-50 text-slate-700 border-slate-200/90 hover:bg-slate-100 hover:text-slate-900'
-                  }`}
-                >
-                  <Utensils className="w-4 h-4 shrink-0" />
-                  <span>Đánh Phiếu Bữa Ăn</span>
-                </button>
+                    <button
+                      onClick={() => setTrainerSubView('nutrition')}
+                      className={`h-9 px-3.5 rounded-xl font-bold transition-all inline-flex items-center justify-center space-x-1.5 cursor-pointer border whitespace-nowrap ${
+                        trainerSubView === 'nutrition'
+                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                          : 'bg-slate-50 text-slate-700 border-slate-200/90 hover:bg-slate-100 hover:text-slate-900'
+                      }`}
+                    >
+                      <Utensils className="w-4 h-4 shrink-0" />
+                      <span>Đánh Phiếu Bữa Ăn</span>
+                    </button>
+
+                    <button
+                      onClick={() => setTrainerSubView('tuition')}
+                      className={`col-span-2 sm:col-span-1 h-9 px-3.5 rounded-xl font-bold transition-all inline-flex items-center justify-center space-x-1.5 cursor-pointer border whitespace-nowrap ${
+                        trainerSubView === 'tuition'
+                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                          : 'bg-slate-50 text-slate-700 border-slate-200/90 hover:bg-slate-100 hover:text-slate-900'
+                      }`}
+                    >
+                      <Wallet className="w-4 h-4 shrink-0" />
+                      <span>Học Phí &amp; Công Nợ</span>
+                    </button>
+                  </>
+                )}
 
                 {isAdmin && (
-                  <button
-                    onClick={() => setTrainerSubView('trainers')}
-                    className={`h-9 px-3.5 rounded-xl font-bold transition-all inline-flex items-center justify-center space-x-1.5 cursor-pointer border whitespace-nowrap ${
-                      trainerSubView === 'trainers'
-                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                        : 'bg-slate-50 text-slate-700 border-slate-200/90 hover:bg-slate-100 hover:text-slate-900'
-                    }`}
-                  >
-                    <ShieldCheck className="w-4 h-4 shrink-0" />
-                    <span>Quản Lý HLV &amp; Tài Khoản</span>
-                  </button>
+                  <>
+                    <button
+                      onClick={() => setAdminSubView('trainers')}
+                      className={`h-9 px-3.5 rounded-xl font-bold transition-all inline-flex items-center justify-center space-x-1.5 cursor-pointer border whitespace-nowrap ${
+                        adminSubView === 'trainers'
+                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                          : 'bg-slate-50 text-slate-700 border-slate-200/90 hover:bg-slate-100 hover:text-slate-900'
+                      }`}
+                    >
+                      <ShieldCheck className="w-4 h-4 shrink-0" />
+                      <span>Quản Lý HLV &amp; Tài Khoản</span>
+                    </button>
+
+                    <button
+                      onClick={() => setAdminSubView('tuition')}
+                      className={`h-9 px-3.5 rounded-xl font-bold transition-all inline-flex items-center justify-center space-x-1.5 cursor-pointer border whitespace-nowrap ${
+                        adminSubView === 'tuition'
+                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                          : 'bg-slate-50 text-slate-700 border-slate-200/90 hover:bg-slate-100 hover:text-slate-900'
+                      }`}
+                    >
+                      <Wallet className="w-4 h-4 shrink-0" />
+                      <span>Học Phí &amp; Doanh Thu</span>
+                    </button>
+                  </>
                 )}
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 lg:pt-0 border-t lg:border-t-0 border-slate-100 shrink-0">
-                <button
-                  onClick={() => setOpenStandardsModal(true)}
-                  className="w-full sm:w-auto h-9 px-3.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold inline-flex items-center justify-center space-x-1.5 transition-colors cursor-pointer border border-slate-200 whitespace-nowrap"
-                >
-                  <BookOpen className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Bảng Chỉ Số Cơ Thể</span>
-                </button>
-              </div>
+              {!isAdmin && (
+                <div className="flex items-center justify-end gap-2 pt-2 lg:pt-0 border-t lg:border-t-0 border-slate-100 shrink-0">
+                  <button
+                    onClick={() => setOpenStandardsModal(true)}
+                    className="w-full sm:w-auto h-9 px-3.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold inline-flex items-center justify-center space-x-1.5 transition-colors cursor-pointer border border-slate-200 whitespace-nowrap"
+                  >
+                    <BookOpen className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>Bảng Chỉ Số Cơ Thể</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* View Render */}
-            {trainerSubView === 'trainers' && isAdmin ? (
-              <TrainerManagementView />
+            {isAdmin ? (
+              adminSubView === 'tuition' ? (
+                <TuitionDashboardView />
+              ) : (
+                <TrainerManagementView />
+              )
+            ) : trainerSubView === 'tuition' ? (
+              <TuitionDashboardView />
             ) : trainerSubView === 'nutrition' ? (
               <NutritionTicketManager
                 mode="trainer"

@@ -222,10 +222,11 @@ async function initDatabase(): Promise<boolean> {
       );
     `);
 
-    // Ensure multi-trainer & ownership columns exist
+    // Ensure multi-trainer, ownership & Herbalife discount tier columns exist
     await client.query(`
       ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(20);
       ALTER TABLE users ADD COLUMN IF NOT EXISTS trainer_id VARCHAR(64);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS discount_tier INT DEFAULT 50;
       ALTER TABLE students ADD COLUMN IF NOT EXISTS trainer_id VARCHAR(64);
       ALTER TABLE students ADD COLUMN IF NOT EXISTS trainer_name VARCHAR(100);
     `);
@@ -265,6 +266,311 @@ async function initDatabase(): Promise<boolean> {
         '',
       ]
     );
+
+    // Tuition, Debt, Herbalife Product Catalog, Revenue Allocation & Operating Cost Tables
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS revenue_entities (
+        id VARCHAR(64) PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        is_active BOOLEAN DEFAULT TRUE,
+        sort_order INT DEFAULT 0,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS herbalife_products (
+        id VARCHAR(64) PRIMARY KEY,
+        name VARCHAR(160) NOT NULL,
+        unit_label VARCHAR(40) NOT NULL DEFAULT 'hộp',
+        portion_unit_label VARCHAR(40) NOT NULL DEFAULT 'hộp',
+        portions_per_unit DECIMAL(6,2) NOT NULL DEFAULT 1,
+        prices JSONB NOT NULL DEFAULT '{}'::jsonb,
+        is_active BOOLEAN DEFAULT TRUE,
+        sort_order INT DEFAULT 0,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS tuition_packages (
+        id VARCHAR(64) PRIMARY KEY,
+        name VARCHAR(120) NOT NULL,
+        monthly_price BIGINT NOT NULL DEFAULT 0,
+        default_duration_months DECIMAL(5,2) NOT NULL DEFAULT 1,
+        default_splits JSONB DEFAULT '{}'::jsonb,
+        bom_items JSONB DEFAULT '[]'::jsonb,
+        is_active BOOLEAN DEFAULT TRUE,
+        sort_order INT DEFAULT 0,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+
+      ALTER TABLE tuition_packages ADD COLUMN IF NOT EXISTS bom_items JSONB DEFAULT '[]'::jsonb;
+
+      CREATE TABLE IF NOT EXISTS tuition_contracts (
+        id VARCHAR(64) PRIMARY KEY,
+        student_code VARCHAR(40) NOT NULL,
+        student_id VARCHAR(64),
+        student_name VARCHAR(180) NOT NULL,
+        phone VARCHAR(30) DEFAULT '',
+        referrer_name VARCHAR(120) DEFAULT '',
+        trainer_id VARCHAR(64),
+        trainer_name VARCHAR(120) DEFAULT '',
+        package_id VARCHAR(64),
+        package_name VARCHAR(120) NOT NULL,
+        start_date DATE NOT NULL,
+        unit_price BIGINT NOT NULL DEFAULT 0,
+        duration_months DECIMAL(5,2) NOT NULL DEFAULT 1,
+        total_amount BIGINT NOT NULL DEFAULT 0,
+        discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
+        discounted_price BIGINT NOT NULL DEFAULT 0,
+        trainer_discount_tier INT NOT NULL DEFAULT 50,
+        referrer_discount_tier INT NOT NULL DEFAULT 50,
+        trainer_product_cost BIGINT NOT NULL DEFAULT 0,
+        referrer_product_cost BIGINT NOT NULL DEFAULT 0,
+        paid_amount BIGINT NOT NULL DEFAULT 0,
+        allocations JSONB DEFAULT '{}'::jsonb,
+        is_manual_allocation BOOLEAN DEFAULT FALSE,
+        allocation_basis VARCHAR(20) DEFAULT 'margin',
+        notes TEXT DEFAULT '',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+
+      ALTER TABLE tuition_contracts ADD COLUMN IF NOT EXISTS discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0;
+      ALTER TABLE tuition_contracts ADD COLUMN IF NOT EXISTS discounted_price BIGINT NOT NULL DEFAULT 0;
+      ALTER TABLE tuition_contracts ADD COLUMN IF NOT EXISTS trainer_discount_tier INT NOT NULL DEFAULT 50;
+      ALTER TABLE tuition_contracts ADD COLUMN IF NOT EXISTS referrer_discount_tier INT NOT NULL DEFAULT 50;
+      ALTER TABLE tuition_contracts ADD COLUMN IF NOT EXISTS trainer_product_cost BIGINT NOT NULL DEFAULT 0;
+      ALTER TABLE tuition_contracts ADD COLUMN IF NOT EXISTS referrer_product_cost BIGINT NOT NULL DEFAULT 0;
+
+      CREATE TABLE IF NOT EXISTS operating_costs (
+        id VARCHAR(64) PRIMARY KEY,
+        cost_date DATE NOT NULL,
+        category VARCHAR(80) NOT NULL,
+        title VARCHAR(200) NOT NULL,
+        amount BIGINT NOT NULL DEFAULT 0,
+        notes TEXT DEFAULT '',
+        created_by VARCHAR(64),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+    `);
+
+    // Seed official Herbalife Vietnam Price List (Effective 08/08/2026, VAT included)
+    const prodCountRes = await client.query('SELECT COUNT(*)::int AS cnt FROM herbalife_products');
+    if ((prodCountRes.rows[0]?.cnt || 0) === 0) {
+      const officialProducts = [
+        {
+          id: 'prod-f1',
+          name: 'Hỗn Hợp Dinh Dưỡng Công Thức 1 (F1 - 550g)',
+          unitLabel: 'hộp',
+          portionUnitLabel: 'khẩu phần',
+          portionsPerUnit: 22,
+          prices: { '0': 1178280, '25': 922663, '35': 820418, '42': 748845, '50': 667048 },
+          sortOrder: 1,
+        },
+        {
+          id: 'prod-tea',
+          name: 'Trà Thảo Mộc Cô Đặc (51g)',
+          unitLabel: 'hũ',
+          portionUnitLabel: 'hũ',
+          portionsPerUnit: 1,
+          prices: { '0': 860760, '25': 670178, '35': 593945, '42': 540582, '50': 479596 },
+          sortOrder: 2,
+        },
+        {
+          id: 'prod-rebuild',
+          name: 'Herbalife 24 Rebuild Strength - Sô Cô La (1,010kg)',
+          unitLabel: 'hũ',
+          portionUnitLabel: 'hũ',
+          portionsPerUnit: 1,
+          prices: { '0': 2430000, '25': 1892402, '35': 1677363, '42': 1526835, '50': 1354804 },
+          sortOrder: 3,
+        },
+        {
+          id: 'prod-ppp',
+          name: 'Bột Protein (240g)',
+          unitLabel: 'hộp',
+          portionUnitLabel: 'hộp',
+          portionsPerUnit: 1,
+          prices: { '0': 913680, '25': 711547, '35': 630694, '42': 574097, '50': 509414 },
+          sortOrder: 4,
+        },
+        {
+          id: 'prod-aloe',
+          name: 'Lô Hội Thảo Mộc Cô Đặc (473ml)',
+          unitLabel: 'chai',
+          portionUnitLabel: 'chai',
+          portionsPerUnit: 1,
+          prices: { '0': 1156680, '25': 900813, '35': 798466, '42': 726823, '50': 644945 },
+          sortOrder: 5,
+        },
+        {
+          id: 'prod-fiber',
+          name: 'Hỗn Hợp Chất Xơ Hoạt Hóa - Hương Táo (210g)',
+          unitLabel: 'hộp',
+          portionUnitLabel: 'hộp',
+          portionsPerUnit: 1,
+          prices: { '0': 1092960, '25': 851154, '35': 754432, '42': 686726, '50': 609348 },
+          sortOrder: 6,
+        },
+      ];
+      for (const p of officialProducts) {
+        await client.query(
+          `INSERT INTO herbalife_products (id, name, unit_label, portion_unit_label, portions_per_unit, prices, is_active, sort_order)
+           VALUES ($1, $2, $3, $4, $5, $6::jsonb, TRUE, $7)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            p.id,
+            p.name,
+            p.unitLabel,
+            p.portionUnitLabel,
+            p.portionsPerUnit,
+            JSON.stringify(p.prices),
+            p.sortOrder,
+          ]
+        );
+      }
+    }
+
+    // Seed default revenue entities only when catalog is empty
+    const entityCountRes = await client.query('SELECT COUNT(*)::int AS cnt FROM revenue_entities');
+    if ((entityCountRes.rows[0]?.cnt || 0) === 0) {
+      const defaultEntities = [
+        { id: 'ent-trung', name: 'HT-Trung', sortOrder: 1 },
+        { id: 'ent-giac', name: 'HT-Giác', sortOrder: 2 },
+        { id: 'ent-khac', name: 'HT-Khác', sortOrder: 3 },
+      ];
+      for (const ent of defaultEntities) {
+        await client.query(
+          `INSERT INTO revenue_entities (id, name, is_active, sort_order)
+           VALUES ($1, $2, TRUE, $3)
+           ON CONFLICT (id) DO NOTHING`,
+          [ent.id, ent.name, ent.sortOrder]
+        );
+      }
+    }
+
+    const standardPackages = [
+      {
+        id: 'pkg-tap-luyen',
+        name: 'Gói tập luyện',
+        monthlyPrice: 300000,
+        defaultDurationMonths: 1,
+        defaultSplits: { trainer: 100, referrer: 0 },
+        bomItems: [],
+        sortOrder: 1,
+      },
+      {
+        id: 'pkg-1tr5',
+        name: 'Gói 1tr5',
+        monthlyPrice: 1500000,
+        defaultDurationMonths: 1,
+        defaultSplits: { trainer: 50, referrer: 50 },
+        bomItems: [{ productId: 'prod-f1', quantity: 30, buyerRole: 'trainer' }],
+        sortOrder: 2,
+      },
+      {
+        id: 'pkg-co-ban',
+        name: 'Gói 2tr5 (Cơ bản)',
+        monthlyPrice: 2500000,
+        defaultDurationMonths: 1,
+        defaultSplits: { trainer: 50, referrer: 50 },
+        bomItems: [
+          { productId: 'prod-f1', quantity: 30, buyerRole: 'trainer' },
+          { productId: 'prod-tea', quantity: 1, buyerRole: 'trainer' },
+        ],
+        sortOrder: 3,
+      },
+      {
+        id: 'pkg-nang-cao',
+        name: 'Gói 3tr7 (Nâng cao)',
+        monthlyPrice: 3700000,
+        defaultDurationMonths: 1,
+        defaultSplits: { trainer: 50, referrer: 50 },
+        bomItems: [
+          { productId: 'prod-f1', quantity: 30, buyerRole: 'trainer' },
+          { productId: 'prod-tea', quantity: 1, buyerRole: 'trainer' },
+          { productId: 'prod-f1', quantity: 30, buyerRole: 'referrer' },
+        ],
+        sortOrder: 4,
+      },
+      {
+        id: 'pkg-toi-uu',
+        name: 'Gói 5tr5 (Tối ưu)',
+        monthlyPrice: 5500000,
+        defaultDurationMonths: 1,
+        defaultSplits: { trainer: 50, referrer: 50 },
+        bomItems: [
+          { productId: 'prod-f1', quantity: 30, buyerRole: 'trainer' },
+          { productId: 'prod-tea', quantity: 1, buyerRole: 'trainer' },
+          { productId: 'prod-f1', quantity: 30, buyerRole: 'referrer' },
+          { productId: 'prod-rebuild', quantity: 1, buyerRole: 'referrer' },
+        ],
+        sortOrder: 5,
+      },
+    ];
+
+    // Seed default tuition packages only when catalog is empty
+    const pkgCountRes = await client.query('SELECT COUNT(*)::int AS cnt FROM tuition_packages');
+    if ((pkgCountRes.rows[0]?.cnt || 0) === 0) {
+      for (const pkg of standardPackages) {
+        await client.query(
+          `INSERT INTO tuition_packages (id, name, monthly_price, default_duration_months, default_splits, bom_items, is_active, sort_order)
+           VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, TRUE, $7)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            pkg.id,
+            pkg.name,
+            pkg.monthlyPrice,
+            pkg.defaultDurationMonths,
+            JSON.stringify(pkg.defaultSplits),
+            JSON.stringify(pkg.bomItems),
+            pkg.sortOrder,
+          ]
+        );
+      }
+    }
+
+    // One-time idempotent migration to apply Herbalife BOMs, 2tr5 pricing, and 50/50 profit splits (>= 1tr5)
+    const bomMigFlag = await client.query(
+      `SELECT value FROM system_settings WHERE key = 'seed_herbalife_bom_v1'`
+    );
+    if (bomMigFlag.rows.length === 0) {
+      for (const pkg of standardPackages) {
+        const existsRes = await client.query('SELECT id FROM tuition_packages WHERE id = $1', [pkg.id]);
+        if (existsRes.rows.length > 0) {
+          await client.query(
+            `UPDATE tuition_packages
+             SET name = $1, monthly_price = $2, default_splits = $3::jsonb, bom_items = $4::jsonb, sort_order = $5
+             WHERE id = $6`,
+            [
+              pkg.name,
+              pkg.monthlyPrice,
+              JSON.stringify(pkg.defaultSplits),
+              JSON.stringify(pkg.bomItems),
+              pkg.sortOrder,
+              pkg.id,
+            ]
+          );
+        } else {
+          await client.query(
+            `INSERT INTO tuition_packages (id, name, monthly_price, default_duration_months, default_splits, bom_items, is_active, sort_order)
+             VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, TRUE, $7)
+             ON CONFLICT (id) DO NOTHING`,
+            [
+              pkg.id,
+              pkg.name,
+              pkg.monthlyPrice,
+              pkg.defaultDurationMonths,
+              JSON.stringify(pkg.defaultSplits),
+              JSON.stringify(pkg.bomItems),
+              pkg.sortOrder,
+            ]
+          );
+        }
+      }
+      await client.query(
+        `INSERT INTO system_settings (key, value) VALUES ('seed_herbalife_bom_v1', 'done')
+         ON CONFLICT (key) DO UPDATE SET value = 'done', updated_at = NOW()`
+      );
+    }
 
     dbInitialized = true;
     lastDbError = null;
@@ -349,7 +655,7 @@ app.post('/api/auth/login', async (req, res) => {
     const cleanPassword = String(password).trim();
 
     const result = await pool.query(
-      'SELECT id, username, full_name, role, phone, student_id, trainer_id, avatar_url FROM users WHERE LOWER(username) = $1 AND password = $2',
+      'SELECT id, username, full_name, role, phone, student_id, trainer_id, avatar_url, discount_tier FROM users WHERE LOWER(username) = $1 AND password = $2',
       [cleanUsername, cleanPassword]
     );
 
@@ -366,6 +672,7 @@ app.post('/api/auth/login', async (req, res) => {
           studentId: u.student_id,
           trainerId: u.trainer_id,
           avatarUrl: u.avatar_url || '',
+          discountTier: Number.isFinite(Number(u.discount_tier)) ? Number(u.discount_tier) : 50,
         },
       });
     }
@@ -381,7 +688,7 @@ app.get('/api/users', async (req, res) => {
   try {
     await ensureDbReady();
     const result = await pool.query(
-      'SELECT id, username, password, full_name, role, phone, student_id, trainer_id, created_at FROM users ORDER BY created_at DESC'
+      'SELECT id, username, password, full_name, role, phone, student_id, trainer_id, discount_tier, created_at FROM users ORDER BY created_at DESC'
     );
     const users = result.rows.map((r) => ({
       id: r.id,
@@ -392,6 +699,7 @@ app.get('/api/users', async (req, res) => {
       phone: r.phone || '',
       studentId: r.student_id || null,
       trainerId: r.trainer_id || null,
+      discountTier: Number.isFinite(Number(r.discount_tier)) ? Number(r.discount_tier) : 50,
       createdAt: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '',
     }));
     return res.json(users);
@@ -404,12 +712,14 @@ app.post('/api/users', async (req, res) => {
   try {
     await ensureDbReady();
 
-    const { username, password, fullName, role, phone, studentId, trainerId } = req.body;
+    const { username, password, fullName, role, phone, studentId, trainerId, discountTier } = req.body;
     const cleanUsername = String(username || '').trim();
     const cleanPassword = String(password || '123').trim();
     const cleanName = String(fullName || '').trim();
     const validRole: 'admin' | 'trainer' | 'student' =
       role === 'admin' || role === 'trainer' || role === 'student' ? role : 'trainer';
+    const rawTier = Number(discountTier);
+    const validDiscountTier = [0, 25, 35, 42, 50].includes(rawTier) ? rawTier : 50;
 
     if (!cleanUsername || !cleanName) {
       return res
@@ -436,13 +746,14 @@ app.post('/api/users', async (req, res) => {
       phone: String(phone || '').trim(),
       studentId: studentId || null,
       trainerId: trainerId || null,
+      discountTier: validDiscountTier,
       avatarUrl: '',
       createdAt: new Date().toISOString().split('T')[0],
     };
 
     await pool.query(
-      `INSERT INTO users (id, username, password, full_name, role, phone, student_id, trainer_id, avatar_url)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      `INSERT INTO users (id, username, password, full_name, role, phone, student_id, trainer_id, discount_tier, avatar_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
       [
         newUser.id,
         newUser.username,
@@ -452,6 +763,7 @@ app.post('/api/users', async (req, res) => {
         newUser.phone,
         newUser.studentId,
         newUser.trainerId,
+        newUser.discountTier,
         '',
       ]
     );
@@ -467,7 +779,7 @@ app.put('/api/users/:id', async (req, res) => {
     await ensureDbReady();
 
     const { id } = req.params;
-    const { username, password, fullName, role, phone, trainerId } = req.body;
+    const { username, password, fullName, role, phone, trainerId, discountTier } = req.body;
 
     const existingRes = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
     if (existingRes.rows.length === 0) {
@@ -486,6 +798,14 @@ app.put('/api/users/:id', async (req, res) => {
         .json({ error: `Tên đăng nhập "${nextUsername}" đã được sử dụng trong Database!` });
     }
 
+    const parsedTier = Number(discountTier);
+    const nextDiscountTier =
+      discountTier !== undefined && [0, 25, 35, 42, 50].includes(parsedTier)
+        ? parsedTier
+        : Number.isFinite(Number(existing.discount_tier))
+        ? Number(existing.discount_tier)
+        : 50;
+
     const updatedUser = {
       id,
       username: nextUsername,
@@ -498,13 +818,14 @@ app.put('/api/users/:id', async (req, res) => {
       phone: phone !== undefined ? String(phone).trim() : existing.phone || '',
       studentId: existing.student_id || null,
       trainerId: trainerId !== undefined ? trainerId : existing.trainer_id || null,
+      discountTier: nextDiscountTier,
       createdAt: existing.created_at
         ? new Date(existing.created_at).toISOString().split('T')[0]
         : '',
     };
 
     await pool.query(
-      `UPDATE users SET username = $1, password = $2, full_name = $3, role = $4, phone = $5, trainer_id = $6 WHERE id = $7`,
+      `UPDATE users SET username = $1, password = $2, full_name = $3, role = $4, phone = $5, trainer_id = $6, discount_tier = $7 WHERE id = $8`,
       [
         updatedUser.username,
         updatedUser.password,
@@ -512,6 +833,7 @@ app.put('/api/users/:id', async (req, res) => {
         updatedUser.role,
         updatedUser.phone || '',
         updatedUser.trainerId || null,
+        updatedUser.discountTier,
         id,
       ]
     );
@@ -1385,6 +1707,927 @@ app.put('/api/notifications/:id/read', async (req, res) => {
     await ensureDbReady();
     const { id } = req.params;
     await pool.query('UPDATE smart_notifications SET read = true WHERE id = $1', [id]);
+    return res.json({ success: true, id });
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
+  }
+});
+
+// =========================================================================
+// TUITION, DEBT, REVENUE ALLOCATION & OPERATING COSTS API (PostgreSQL + RBAC)
+// =========================================================================
+
+interface TuitionActor {
+  id: string;
+  username: string;
+  fullName: string;
+  role: 'admin' | 'trainer' | 'student';
+}
+
+async function resolveTuitionActor(req: express.Request): Promise<TuitionActor | null> {
+  const rawUsername = req.headers['x-auth-username'];
+  const username = Array.isArray(rawUsername) ? rawUsername[0] : rawUsername;
+  if (!username || !String(username).trim()) return null;
+
+  const res = await pool.query(
+    'SELECT id, username, full_name, role FROM users WHERE LOWER(username) = $1 LIMIT 1',
+    [String(username).trim().toLowerCase()]
+  );
+  if (res.rows.length === 0) return null;
+  const u = res.rows[0];
+  return {
+    id: u.id,
+    username: u.username,
+    fullName: u.full_name,
+    role: u.role as 'admin' | 'trainer' | 'student',
+  };
+}
+
+function mapRevenueEntityRow(r: any) {
+  return {
+    id: r.id,
+    name: r.name,
+    isActive: r.is_active !== false,
+    sortOrder: Number(r.sort_order) || 0,
+    createdAt: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '',
+  };
+}
+
+function mapHerbalifeProductRow(r: any) {
+  return {
+    id: r.id,
+    name: r.name,
+    unitLabel: r.unit_label || 'hộp',
+    portionUnitLabel: r.portion_unit_label || r.unit_label || 'hộp',
+    portionsPerUnit: Number(r.portions_per_unit) || 1,
+    prices: r.prices && typeof r.prices === 'object' ? r.prices : {},
+    isActive: r.is_active !== false,
+    sortOrder: Number(r.sort_order) || 0,
+    createdAt: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '',
+  };
+}
+
+function sanitizeBomItems(raw: unknown): Array<{ productId: string; quantity: number; buyerRole: 'trainer' | 'referrer' }> {
+  if (!Array.isArray(raw)) return [];
+  const out: Array<{ productId: string; quantity: number; buyerRole: 'trainer' | 'referrer' }> = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const obj = item as Record<string, unknown>;
+    const productId = String(obj.productId || '').trim();
+    const quantity = Math.round(Math.max(0, Number(obj.quantity) || 0) * 100) / 100;
+    const buyerRole = obj.buyerRole === 'referrer' ? 'referrer' : 'trainer';
+    if (productId && quantity > 0) {
+      out.push({ productId, quantity, buyerRole });
+    }
+  }
+  return out;
+}
+
+function mapTuitionPackageRow(r: any) {
+  return {
+    id: r.id,
+    name: r.name,
+    monthlyPrice: Number(r.monthly_price) || 0,
+    defaultDurationMonths: Number(r.default_duration_months) || 1,
+    defaultSplits: r.default_splits && typeof r.default_splits === 'object' ? r.default_splits : {},
+    bomItems: Array.isArray(r.bom_items) ? r.bom_items : [],
+    isActive: r.is_active !== false,
+    sortOrder: Number(r.sort_order) || 0,
+    createdAt: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '',
+  };
+}
+
+function mapTuitionContractRow(r: any) {
+  const trainerProductCost = Math.max(0, Number(r.trainer_product_cost) || 0);
+  const referrerProductCost = Math.max(0, Number(r.referrer_product_cost) || 0);
+  const legacyDiscPrice =
+    r.discounted_price !== undefined && r.discounted_price !== null
+      ? Math.max(0, Number(r.discounted_price) || 0)
+      : 0;
+  const totalProductCost =
+    trainerProductCost + referrerProductCost > 0
+      ? trainerProductCost + referrerProductCost
+      : legacyDiscPrice;
+
+  return {
+    id: r.id,
+    studentCode: r.student_code,
+    studentId: r.student_id || null,
+    studentName: r.student_name,
+    phone: r.phone || '',
+    referrerName: r.referrer_name || '',
+    trainerId: r.trainer_id || null,
+    trainerName: r.trainer_name || '',
+    packageId: r.package_id || null,
+    packageName: r.package_name,
+    startDate: r.start_date ? new Date(r.start_date).toISOString().split('T')[0] : '',
+    unitPrice: Number(r.unit_price) || 0,
+    durationMonths: Number(r.duration_months) || 1,
+    totalAmount: Number(r.total_amount) || 0,
+    discountPercent: Number(r.discount_percent) || 0,
+    discountedPrice: totalProductCost,
+    trainerDiscountTier: Number.isFinite(Number(r.trainer_discount_tier))
+      ? Number(r.trainer_discount_tier)
+      : Number(r.discount_percent) || 50,
+    referrerDiscountTier: Number.isFinite(Number(r.referrer_discount_tier))
+      ? Number(r.referrer_discount_tier)
+      : 50,
+    trainerProductCost,
+    referrerProductCost,
+    paidAmount: Number(r.paid_amount) || 0,
+    allocations: r.allocations && typeof r.allocations === 'object' ? r.allocations : { trainer: 0, referrer: 0 },
+    isManualAllocation: Boolean(r.is_manual_allocation),
+    allocationBasis:
+      r.allocation_basis === 'paid'
+        ? 'paid'
+        : r.allocation_basis === 'total'
+        ? 'total'
+        : 'margin',
+    notes: r.notes || '',
+    createdAt: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '',
+    updatedAt: r.updated_at ? new Date(r.updated_at).toISOString().split('T')[0] : '',
+  };
+}
+
+function mapOperatingCostRow(r: any) {
+  return {
+    id: r.id,
+    costDate: r.cost_date ? new Date(r.cost_date).toISOString().split('T')[0] : '',
+    category: r.category,
+    title: r.title,
+    amount: Number(r.amount) || 0,
+    notes: r.notes || '',
+    createdBy: r.created_by || '',
+    createdAt: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '',
+  };
+}
+
+function sanitizeNumericRecord(obj: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!obj || typeof obj !== 'object') return out;
+  for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+    const n = Number(v);
+    if (k && Number.isFinite(n)) {
+      out[k] = Math.round(n * 100) / 100;
+    }
+  }
+  return out;
+}
+
+function normalizeServerDiscountTier(raw: unknown, fallback = 50): number {
+  const n = Number(raw);
+  if (n === 37) return 35;
+  return [0, 25, 35, 42, 50].includes(n) ? n : fallback;
+}
+
+// Bootstrap all tuition data scoped by authenticated role (Admin vs Trainer)
+app.get('/api/tuition/bootstrap', async (req, res) => {
+  try {
+    await ensureDbReady();
+    const actor = await resolveTuitionActor(req);
+    if (!actor) {
+      return res.status(401).json({ error: 'Vui lòng đăng nhập để truy cập dữ liệu học phí.' });
+    }
+    if (actor.role !== 'admin' && actor.role !== 'trainer') {
+      return res.status(403).json({ error: 'Tài khoản không có quyền truy cập phân hệ học phí.' });
+    }
+
+    const [entitiesRes, productsRes, packagesRes] = await Promise.all([
+      pool.query('SELECT * FROM revenue_entities ORDER BY sort_order ASC, created_at ASC'),
+      pool.query('SELECT * FROM herbalife_products ORDER BY sort_order ASC, created_at ASC'),
+      pool.query('SELECT * FROM tuition_packages ORDER BY sort_order ASC, created_at ASC'),
+    ]);
+
+    let contractsRes;
+    if (actor.role === 'admin') {
+      contractsRes = await pool.query(
+        'SELECT * FROM tuition_contracts ORDER BY start_date DESC, created_at DESC'
+      );
+    } else {
+      contractsRes = await pool.query(
+        `SELECT tc.*
+         FROM tuition_contracts tc
+         LEFT JOIN students s ON s.id = tc.student_id
+         WHERE tc.trainer_id = $1
+            OR s.trainer_id = $1
+            OR LOWER(TRIM(COALESCE(tc.trainer_name, ''))) = LOWER(TRIM($2))
+         ORDER BY tc.start_date DESC, tc.created_at DESC`,
+        [actor.id, actor.fullName]
+      );
+    }
+
+    let operatingCosts: ReturnType<typeof mapOperatingCostRow>[] = [];
+    if (actor.role === 'admin') {
+      const costsRes = await pool.query(
+        'SELECT * FROM operating_costs ORDER BY cost_date DESC, created_at DESC'
+      );
+      operatingCosts = costsRes.rows.map(mapOperatingCostRow);
+    }
+
+    return res.json({
+      entities: entitiesRes.rows.map(mapRevenueEntityRow),
+      products: productsRes.rows.map(mapHerbalifeProductRow),
+      packages: packagesRes.rows.map(mapTuitionPackageRow),
+      contracts: contractsRes.rows.map(mapTuitionContractRow),
+      operatingCosts,
+    });
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
+  }
+});
+
+// Create Tuition Contract (Admin or Trainer for their own students)
+app.post('/api/tuition/contracts', async (req, res) => {
+  try {
+    await ensureDbReady();
+    const actor = await resolveTuitionActor(req);
+    if (!actor || (actor.role !== 'admin' && actor.role !== 'trainer')) {
+      return res.status(403).json({ error: 'Bạn không có quyền thêm hợp đồng học phí.' });
+    }
+
+    const body = req.body || {};
+    const studentName = String(body.studentName || '').trim();
+    const packageName = String(body.packageName || '').trim();
+    const startDate = String(body.startDate || new Date().toISOString().split('T')[0]).trim();
+    const studentCode = String(body.studentCode || '').trim() || `HV-${Date.now().toString().slice(-4)}`;
+
+    if (!studentName || !packageName) {
+      return res.status(400).json({ error: 'Vui lòng nhập đầy đủ Tên học viên và Gói tập.' });
+    }
+
+    let studentId: string | null = body.studentId ? String(body.studentId).trim() : null;
+    let trainerId: string | null = body.trainerId ? String(body.trainerId).trim() : null;
+    let trainerName = String(body.trainerName || '').trim();
+
+    if (actor.role === 'trainer') {
+      if (studentId) {
+        const stuRes = await pool.query('SELECT trainer_id FROM students WHERE id = $1', [studentId]);
+        if (stuRes.rows.length > 0 && stuRes.rows[0].trainer_id && stuRes.rows[0].trainer_id !== actor.id) {
+          return res
+            .status(403)
+            .json({ error: 'Bạn chỉ được tạo hợp đồng cho học viên thuộc quyền phụ trách của mình.' });
+        }
+      }
+      trainerId = actor.id;
+      trainerName = actor.fullName;
+    } else if (trainerId && !trainerName) {
+      const trRes = await pool.query('SELECT full_name FROM users WHERE id = $1', [trainerId]);
+      if (trRes.rows.length > 0) trainerName = trRes.rows[0].full_name;
+    }
+
+    const unitPrice = Math.max(0, Math.round(Number(body.unitPrice) || 0));
+    const durationMonths = Math.max(0.5, Number(body.durationMonths) || 1);
+    const totalAmount = Math.max(0, Math.round(unitPrice * durationMonths));
+    const trainerDiscountTier = normalizeServerDiscountTier(
+      body.trainerDiscountTier ?? body.discountPercent,
+      50
+    );
+    const referrerDiscountTier = normalizeServerDiscountTier(body.referrerDiscountTier, 50);
+    const trainerProductCost = Math.max(0, Math.round(Number(body.trainerProductCost) || 0));
+    const referrerProductCost = Math.max(0, Math.round(Number(body.referrerProductCost) || 0));
+    const totalProductCost =
+      trainerProductCost + referrerProductCost > 0
+        ? trainerProductCost + referrerProductCost
+        : Math.max(0, Math.round(Number(body.discountedPrice) || 0));
+    const paidAmount = Math.max(0, Math.round(Number(body.paidAmount) || 0));
+    const allocations = sanitizeNumericRecord(body.allocations);
+    const isManualAllocation = Boolean(body.isManualAllocation);
+    const allocationBasis =
+      body.allocationBasis === 'paid'
+        ? 'paid'
+        : body.allocationBasis === 'total'
+        ? 'total'
+        : 'margin';
+    const id = body.id ? String(body.id).trim() : `tc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+    const insertRes = await pool.query(
+      `INSERT INTO tuition_contracts (
+        id, student_code, student_id, student_name, phone, referrer_name,
+        trainer_id, trainer_name, package_id, package_name, start_date,
+        unit_price, duration_months, total_amount, discount_percent, discounted_price,
+        trainer_discount_tier, referrer_discount_tier, trainer_product_cost, referrer_product_cost,
+        paid_amount, allocations, is_manual_allocation, allocation_basis, notes
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6,
+        $7, $8, $9, $10, $11,
+        $12, $13, $14, $15, $16,
+        $17, $18, $19, $20,
+        $21, $22::jsonb, $23, $24, $25
+      ) RETURNING *`,
+      [
+        id,
+        studentCode,
+        studentId,
+        studentName,
+        String(body.phone || '').trim(),
+        String(body.referrerName || '').trim(),
+        trainerId,
+        trainerName,
+        body.packageId ? String(body.packageId).trim() : null,
+        packageName,
+        startDate,
+        unitPrice,
+        durationMonths,
+        totalAmount,
+        trainerDiscountTier,
+        totalProductCost,
+        trainerDiscountTier,
+        referrerDiscountTier,
+        trainerProductCost,
+        referrerProductCost,
+        paidAmount,
+        JSON.stringify(allocations),
+        isManualAllocation,
+        allocationBasis,
+        String(body.notes || '').trim(),
+      ]
+    );
+
+    return res.status(201).json(mapTuitionContractRow(insertRes.rows[0]));
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
+  }
+});
+
+// Update Tuition Contract
+app.put('/api/tuition/contracts/:id', async (req, res) => {
+  try {
+    await ensureDbReady();
+    const actor = await resolveTuitionActor(req);
+    if (!actor || (actor.role !== 'admin' && actor.role !== 'trainer')) {
+      return res.status(403).json({ error: 'Bạn không có quyền chỉnh sửa hợp đồng học phí.' });
+    }
+
+    const { id } = req.params;
+    const existingRes = await pool.query('SELECT * FROM tuition_contracts WHERE id = $1', [id]);
+    if (existingRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Không tìm thấy hợp đồng học phí.' });
+    }
+    const existing = existingRes.rows[0];
+
+    if (actor.role === 'trainer') {
+      const ownsDirectly =
+        existing.trainer_id === actor.id ||
+        String(existing.trainer_name || '').trim().toLowerCase() === actor.fullName.trim().toLowerCase();
+      let ownsStudent = false;
+      if (!ownsDirectly && existing.student_id) {
+        const sRes = await pool.query('SELECT trainer_id FROM students WHERE id = $1', [existing.student_id]);
+        ownsStudent = sRes.rows[0]?.trainer_id === actor.id;
+      }
+      if (!ownsDirectly && !ownsStudent) {
+        return res.status(403).json({ error: 'Bạn không có quyền sửa hợp đồng của HLV khác.' });
+      }
+    }
+
+    const body = req.body || {};
+    const studentName = String(body.studentName || existing.student_name).trim();
+    const packageName = String(body.packageName || existing.package_name).trim();
+    const studentCode = String(body.studentCode || existing.student_code).trim();
+    const startDate = String(
+      body.startDate || (existing.start_date ? new Date(existing.start_date).toISOString().split('T')[0] : '')
+    ).trim();
+
+    let trainerId: string | null =
+      actor.role === 'trainer'
+        ? actor.id
+        : body.trainerId !== undefined
+        ? body.trainerId || null
+        : existing.trainer_id;
+    let trainerName =
+      actor.role === 'trainer'
+        ? actor.fullName
+        : body.trainerName !== undefined
+        ? String(body.trainerName || '').trim()
+        : existing.trainer_name;
+
+    if (actor.role === 'admin' && trainerId && !trainerName) {
+      const trRes = await pool.query('SELECT full_name FROM users WHERE id = $1', [trainerId]);
+      if (trRes.rows.length > 0) trainerName = trRes.rows[0].full_name;
+    }
+
+    const unitPrice = Math.max(0, Math.round(Number(body.unitPrice ?? existing.unit_price) || 0));
+    const durationMonths = Math.max(0.5, Number(body.durationMonths ?? existing.duration_months) || 1);
+    const totalAmount = Math.max(0, Math.round(unitPrice * durationMonths));
+    const trainerDiscountTier = normalizeServerDiscountTier(
+      body.trainerDiscountTier ?? body.discountPercent ?? existing.trainer_discount_tier,
+      50
+    );
+    const referrerDiscountTier = normalizeServerDiscountTier(
+      body.referrerDiscountTier ?? existing.referrer_discount_tier,
+      50
+    );
+    const trainerProductCost = Math.max(
+      0,
+      Math.round(Number(body.trainerProductCost ?? existing.trainer_product_cost) || 0)
+    );
+    const referrerProductCost = Math.max(
+      0,
+      Math.round(Number(body.referrerProductCost ?? existing.referrer_product_cost) || 0)
+    );
+    const totalProductCost =
+      trainerProductCost + referrerProductCost > 0
+        ? trainerProductCost + referrerProductCost
+        : Math.max(0, Math.round(Number(body.discountedPrice ?? existing.discounted_price) || 0));
+    const paidAmount = Math.max(0, Math.round(Number(body.paidAmount ?? existing.paid_amount) || 0));
+    const allocations =
+      body.allocations !== undefined ? sanitizeNumericRecord(body.allocations) : existing.allocations || {};
+    const isManualAllocation =
+      body.isManualAllocation !== undefined
+        ? Boolean(body.isManualAllocation)
+        : Boolean(existing.is_manual_allocation);
+    const allocationBasis =
+      body.allocationBasis !== undefined
+        ? body.allocationBasis === 'paid'
+          ? 'paid'
+          : body.allocationBasis === 'total'
+          ? 'total'
+          : 'margin'
+        : existing.allocation_basis || 'margin';
+
+    const updateRes = await pool.query(
+      `UPDATE tuition_contracts
+       SET student_code = $1,
+           student_id = $2,
+           student_name = $3,
+           phone = $4,
+           referrer_name = $5,
+           trainer_id = $6,
+           trainer_name = $7,
+           package_id = $8,
+           package_name = $9,
+           start_date = $10,
+           unit_price = $11,
+           duration_months = $12,
+           total_amount = $13,
+           discount_percent = $14,
+           discounted_price = $15,
+           trainer_discount_tier = $16,
+           referrer_discount_tier = $17,
+           trainer_product_cost = $18,
+           referrer_product_cost = $19,
+           paid_amount = $20,
+           allocations = $21::jsonb,
+           is_manual_allocation = $22,
+           allocation_basis = $23,
+           notes = $24,
+           updated_at = NOW()
+       WHERE id = $25
+       RETURNING *`,
+      [
+        studentCode,
+        body.studentId !== undefined ? body.studentId || null : existing.student_id,
+        studentName,
+        String(body.phone ?? existing.phone ?? '').trim(),
+        String(body.referrerName ?? existing.referrer_name ?? '').trim(),
+        trainerId,
+        trainerName,
+        body.packageId !== undefined ? body.packageId || null : existing.package_id,
+        packageName,
+        startDate,
+        unitPrice,
+        durationMonths,
+        totalAmount,
+        trainerDiscountTier,
+        totalProductCost,
+        trainerDiscountTier,
+        referrerDiscountTier,
+        trainerProductCost,
+        referrerProductCost,
+        paidAmount,
+        JSON.stringify(allocations),
+        isManualAllocation,
+        allocationBasis,
+        String(body.notes ?? existing.notes ?? '').trim(),
+        id,
+      ]
+    );
+
+    return res.json(mapTuitionContractRow(updateRes.rows[0]));
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
+  }
+});
+
+// Record quick installment payment on a contract
+app.post('/api/tuition/contracts/:id/payment', async (req, res) => {
+  try {
+    await ensureDbReady();
+    const actor = await resolveTuitionActor(req);
+    if (!actor || (actor.role !== 'admin' && actor.role !== 'trainer')) {
+      return res.status(403).json({ error: 'Bạn không có quyền ghi nhận thanh toán.' });
+    }
+
+    const { id } = req.params;
+    const existingRes = await pool.query('SELECT * FROM tuition_contracts WHERE id = $1', [id]);
+    if (existingRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Không tìm thấy hợp đồng học phí.' });
+    }
+    const existing = existingRes.rows[0];
+
+    if (actor.role === 'trainer') {
+      const ownsDirectly =
+        existing.trainer_id === actor.id ||
+        String(existing.trainer_name || '').trim().toLowerCase() === actor.fullName.trim().toLowerCase();
+      let ownsStudent = false;
+      if (!ownsDirectly && existing.student_id) {
+        const sRes = await pool.query('SELECT trainer_id FROM students WHERE id = $1', [existing.student_id]);
+        ownsStudent = sRes.rows[0]?.trainer_id === actor.id;
+      }
+      if (!ownsDirectly && !ownsStudent) {
+        return res.status(403).json({ error: 'Bạn không có quyền cập nhật thanh toán cho học viên của HLV khác.' });
+      }
+    }
+
+    const addAmount = Math.max(0, Math.round(Number(req.body?.amount) || 0));
+    if (addAmount <= 0) {
+      return res.status(400).json({ error: 'Số tiền thanh toán thêm phải lớn hơn 0.' });
+    }
+
+    const newPaidAmount = Math.round(Number(existing.paid_amount) || 0) + addAmount;
+    const extraNote = String(req.body?.note || '').trim();
+    const dateStamp = new Date().toISOString().split('T')[0];
+    const combinedNotes = extraNote
+      ? [existing.notes, `[${dateStamp} +${addAmount.toLocaleString('vi-VN')}đ: ${extraNote}]`]
+          .filter(Boolean)
+          .join(' ')
+      : existing.notes || '';
+
+    const updateRes = await pool.query(
+      `UPDATE tuition_contracts
+       SET paid_amount = $1, notes = $2, updated_at = NOW()
+       WHERE id = $3
+       RETURNING *`,
+      [newPaidAmount, combinedNotes, id]
+    );
+
+    return res.json(mapTuitionContractRow(updateRes.rows[0]));
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
+  }
+});
+
+// Delete Tuition Contract
+app.delete('/api/tuition/contracts/:id', async (req, res) => {
+  try {
+    await ensureDbReady();
+    const actor = await resolveTuitionActor(req);
+    if (!actor || (actor.role !== 'admin' && actor.role !== 'trainer')) {
+      return res.status(403).json({ error: 'Bạn không có quyền xóa hợp đồng học phí.' });
+    }
+
+    const { id } = req.params;
+    const existingRes = await pool.query('SELECT * FROM tuition_contracts WHERE id = $1', [id]);
+    if (existingRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Không tìm thấy hợp đồng học phí.' });
+    }
+    const existing = existingRes.rows[0];
+
+    if (actor.role === 'trainer') {
+      const ownsDirectly =
+        existing.trainer_id === actor.id ||
+        String(existing.trainer_name || '').trim().toLowerCase() === actor.fullName.trim().toLowerCase();
+      if (!ownsDirectly) {
+        return res.status(403).json({ error: 'Bạn chỉ được xóa hợp đồng thuộc quyền phụ trách của mình.' });
+      }
+    }
+
+    await pool.query('DELETE FROM tuition_contracts WHERE id = $1', [id]);
+    return res.json({ success: true, id });
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
+  }
+});
+
+// Admin-only: Herbalife Products Price Catalog CRUD
+app.post('/api/tuition/products', async (req, res) => {
+  try {
+    await ensureDbReady();
+    const actor = await resolveTuitionActor(req);
+    if (!actor || actor.role !== 'admin') {
+      return res.status(403).json({ error: 'Chỉ Admin mới có quyền quản lý bảng giá sản phẩm.' });
+    }
+
+    const name = String(req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Vui lòng nhập tên sản phẩm.' });
+
+    const unitLabel = String(req.body?.unitLabel || 'hộp').trim() || 'hộp';
+    const portionUnitLabel = String(req.body?.portionUnitLabel || unitLabel).trim() || unitLabel;
+    const portionsPerUnit = Math.max(0.1, Number(req.body?.portionsPerUnit) || 1);
+    const prices = sanitizeNumericRecord(req.body?.prices);
+    const orderRes = await pool.query('SELECT COALESCE(MAX(sort_order), 0)::int AS max_order FROM herbalife_products');
+    const sortOrder = (orderRes.rows[0]?.max_order || 0) + 1;
+    const id = `prod-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+
+    const insertRes = await pool.query(
+      `INSERT INTO herbalife_products (id, name, unit_label, portion_unit_label, portions_per_unit, prices, is_active, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, TRUE, $7)
+       RETURNING *`,
+      [id, name, unitLabel, portionUnitLabel, portionsPerUnit, JSON.stringify(prices), sortOrder]
+    );
+    return res.status(201).json(mapHerbalifeProductRow(insertRes.rows[0]));
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
+  }
+});
+
+app.put('/api/tuition/products/:id', async (req, res) => {
+  try {
+    await ensureDbReady();
+    const actor = await resolveTuitionActor(req);
+    if (!actor || actor.role !== 'admin') {
+      return res.status(403).json({ error: 'Chỉ Admin mới có quyền cập nhật bảng giá sản phẩm.' });
+    }
+
+    const { id } = req.params;
+    const existingRes = await pool.query('SELECT * FROM herbalife_products WHERE id = $1', [id]);
+    if (existingRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Không tìm thấy sản phẩm.' });
+    }
+    const existing = existingRes.rows[0];
+
+    const name = String(req.body?.name ?? existing.name).trim();
+    const unitLabel = String(req.body?.unitLabel ?? existing.unit_label ?? 'hộp').trim();
+    const portionUnitLabel = String(req.body?.portionUnitLabel ?? existing.portion_unit_label ?? unitLabel).trim();
+    const portionsPerUnit = Math.max(0.1, Number(req.body?.portionsPerUnit ?? existing.portions_per_unit) || 1);
+    const prices =
+      req.body?.prices !== undefined
+        ? sanitizeNumericRecord(req.body.prices)
+        : existing.prices || {};
+    const isActive = req.body?.isActive !== undefined ? Boolean(req.body.isActive) : existing.is_active;
+
+    const updateRes = await pool.query(
+      `UPDATE herbalife_products
+       SET name = $1, unit_label = $2, portion_unit_label = $3, portions_per_unit = $4, prices = $5::jsonb, is_active = $6
+       WHERE id = $7
+       RETURNING *`,
+      [name, unitLabel, portionUnitLabel, portionsPerUnit, JSON.stringify(prices), isActive, id]
+    );
+    return res.json(mapHerbalifeProductRow(updateRes.rows[0]));
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
+  }
+});
+
+app.delete('/api/tuition/products/:id', async (req, res) => {
+  try {
+    await ensureDbReady();
+    const actor = await resolveTuitionActor(req);
+    if (!actor || actor.role !== 'admin') {
+      return res.status(403).json({ error: 'Chỉ Admin mới có quyền xóa sản phẩm.' });
+    }
+
+    const { id } = req.params;
+    await pool.query('DELETE FROM herbalife_products WHERE id = $1', [id]);
+    return res.json({ success: true, id });
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
+  }
+});
+
+// Admin-only: Tuition Packages CRUD
+app.post('/api/tuition/packages', async (req, res) => {
+  try {
+    await ensureDbReady();
+    const actor = await resolveTuitionActor(req);
+    if (!actor || actor.role !== 'admin') {
+      return res.status(403).json({ error: 'Chỉ Admin mới có quyền cấu hình gói tập.' });
+    }
+
+    const name = String(req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Vui lòng nhập tên gói tập.' });
+
+    const monthlyPrice = Math.max(0, Math.round(Number(req.body?.monthlyPrice) || 0));
+    const defaultDurationMonths = Math.max(0.5, Number(req.body?.defaultDurationMonths) || 1);
+    const defaultSplits = sanitizeNumericRecord(req.body?.defaultSplits);
+    const bomItems = sanitizeBomItems(req.body?.bomItems);
+    const orderRes = await pool.query('SELECT COALESCE(MAX(sort_order), 0)::int AS max_order FROM tuition_packages');
+    const sortOrder = (orderRes.rows[0]?.max_order || 0) + 1;
+    const id = `pkg-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+
+    const insertRes = await pool.query(
+      `INSERT INTO tuition_packages (id, name, monthly_price, default_duration_months, default_splits, bom_items, is_active, sort_order)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, TRUE, $7)
+       RETURNING *`,
+      [id, name, monthlyPrice, defaultDurationMonths, JSON.stringify(defaultSplits), JSON.stringify(bomItems), sortOrder]
+    );
+    return res.status(201).json(mapTuitionPackageRow(insertRes.rows[0]));
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
+  }
+});
+
+app.put('/api/tuition/packages/:id', async (req, res) => {
+  try {
+    await ensureDbReady();
+    const actor = await resolveTuitionActor(req);
+    if (!actor || actor.role !== 'admin') {
+      return res.status(403).json({ error: 'Chỉ Admin mới có quyền cập nhật gói tập.' });
+    }
+
+    const { id } = req.params;
+    const existingRes = await pool.query('SELECT * FROM tuition_packages WHERE id = $1', [id]);
+    if (existingRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Không tìm thấy gói tập.' });
+    }
+    const existing = existingRes.rows[0];
+
+    const name = String(req.body?.name ?? existing.name).trim();
+    const monthlyPrice = Math.max(0, Math.round(Number(req.body?.monthlyPrice ?? existing.monthly_price) || 0));
+    const defaultDurationMonths = Math.max(
+      0.5,
+      Number(req.body?.defaultDurationMonths ?? existing.default_duration_months) || 1
+    );
+    const defaultSplits =
+      req.body?.defaultSplits !== undefined
+        ? sanitizeNumericRecord(req.body.defaultSplits)
+        : existing.default_splits || {};
+    const bomItems =
+      req.body?.bomItems !== undefined
+        ? sanitizeBomItems(req.body.bomItems)
+        : Array.isArray(existing.bom_items)
+        ? existing.bom_items
+        : [];
+    const isActive = req.body?.isActive !== undefined ? Boolean(req.body.isActive) : existing.is_active;
+
+    const updateRes = await pool.query(
+      `UPDATE tuition_packages
+       SET name = $1, monthly_price = $2, default_duration_months = $3, default_splits = $4::jsonb, bom_items = $5::jsonb, is_active = $6
+       WHERE id = $7
+       RETURNING *`,
+      [name, monthlyPrice, defaultDurationMonths, JSON.stringify(defaultSplits), JSON.stringify(bomItems), isActive, id]
+    );
+    return res.json(mapTuitionPackageRow(updateRes.rows[0]));
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
+  }
+});
+
+app.delete('/api/tuition/packages/:id', async (req, res) => {
+  try {
+    await ensureDbReady();
+    const actor = await resolveTuitionActor(req);
+    if (!actor || actor.role !== 'admin') {
+      return res.status(403).json({ error: 'Chỉ Admin mới có quyền xóa gói tập.' });
+    }
+
+    const { id } = req.params;
+    await pool.query('DELETE FROM tuition_packages WHERE id = $1', [id]);
+    return res.json({ success: true, id });
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
+  }
+});
+
+// Admin-only: Revenue Allocation Entities CRUD
+app.post('/api/tuition/entities', async (req, res) => {
+  try {
+    await ensureDbReady();
+    const actor = await resolveTuitionActor(req);
+    if (!actor || actor.role !== 'admin') {
+      return res.status(403).json({ error: 'Chỉ Admin mới có quyền quản lý đối tượng phân bổ.' });
+    }
+
+    const name = String(req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Vui lòng nhập tên đối tượng hệ thống.' });
+
+    const orderRes = await pool.query('SELECT COALESCE(MAX(sort_order), 0)::int AS max_order FROM revenue_entities');
+    const sortOrder = (orderRes.rows[0]?.max_order || 0) + 1;
+    const id = `ent-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+
+    const insertRes = await pool.query(
+      `INSERT INTO revenue_entities (id, name, is_active, sort_order)
+       VALUES ($1, $2, TRUE, $3)
+       RETURNING *`,
+      [id, name, sortOrder]
+    );
+    return res.status(201).json(mapRevenueEntityRow(insertRes.rows[0]));
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
+  }
+});
+
+app.put('/api/tuition/entities/:id', async (req, res) => {
+  try {
+    await ensureDbReady();
+    const actor = await resolveTuitionActor(req);
+    if (!actor || actor.role !== 'admin') {
+      return res.status(403).json({ error: 'Chỉ Admin mới có quyền sửa đối tượng phân bổ.' });
+    }
+
+    const { id } = req.params;
+    const existingRes = await pool.query('SELECT * FROM revenue_entities WHERE id = $1', [id]);
+    if (existingRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Không tìm thấy đối tượng phân bổ.' });
+    }
+    const existing = existingRes.rows[0];
+
+    const name = String(req.body?.name ?? existing.name).trim();
+    const isActive = req.body?.isActive !== undefined ? Boolean(req.body.isActive) : existing.is_active;
+
+    const updateRes = await pool.query(
+      `UPDATE revenue_entities SET name = $1, is_active = $2 WHERE id = $3 RETURNING *`,
+      [name, isActive, id]
+    );
+    return res.json(mapRevenueEntityRow(updateRes.rows[0]));
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
+  }
+});
+
+app.delete('/api/tuition/entities/:id', async (req, res) => {
+  try {
+    await ensureDbReady();
+    const actor = await resolveTuitionActor(req);
+    if (!actor || actor.role !== 'admin') {
+      return res.status(403).json({ error: 'Chỉ Admin mới có quyền xóa đối tượng phân bổ.' });
+    }
+
+    const { id } = req.params;
+    await pool.query('DELETE FROM revenue_entities WHERE id = $1', [id]);
+    return res.json({ success: true, id });
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
+  }
+});
+
+// Admin-only: Operating Costs Ledger CRUD
+app.post('/api/tuition/costs', async (req, res) => {
+  try {
+    await ensureDbReady();
+    const actor = await resolveTuitionActor(req);
+    if (!actor || actor.role !== 'admin') {
+      return res.status(403).json({ error: 'Chỉ Admin mới có quyền ghi nhận chi phí vận hành.' });
+    }
+
+    const title = String(req.body?.title || '').trim();
+    const category = String(req.body?.category || 'Chi phí khác').trim();
+    const costDate = String(req.body?.costDate || new Date().toISOString().split('T')[0]).trim();
+    const amount = Math.max(0, Math.round(Number(req.body?.amount) || 0));
+    const notes = String(req.body?.notes || '').trim();
+
+    if (!title || amount <= 0) {
+      return res.status(400).json({ error: 'Vui lòng nhập nội dung chi và số tiền lớn hơn 0.' });
+    }
+
+    const id = `cost-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+    const insertRes = await pool.query(
+      `INSERT INTO operating_costs (id, cost_date, category, title, amount, notes, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [id, costDate, category, title, amount, notes, actor.username]
+    );
+    return res.status(201).json(mapOperatingCostRow(insertRes.rows[0]));
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
+  }
+});
+
+app.put('/api/tuition/costs/:id', async (req, res) => {
+  try {
+    await ensureDbReady();
+    const actor = await resolveTuitionActor(req);
+    if (!actor || actor.role !== 'admin') {
+      return res.status(403).json({ error: 'Chỉ Admin mới có quyền cập nhật chi phí vận hành.' });
+    }
+
+    const { id } = req.params;
+    const existingRes = await pool.query('SELECT * FROM operating_costs WHERE id = $1', [id]);
+    if (existingRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Không tìm thấy khoản chi phí.' });
+    }
+    const existing = existingRes.rows[0];
+
+    const title = String(req.body?.title ?? existing.title).trim();
+    const category = String(req.body?.category ?? existing.category).trim();
+    const costDate = String(
+      req.body?.costDate || (existing.cost_date ? new Date(existing.cost_date).toISOString().split('T')[0] : '')
+    ).trim();
+    const amount = Math.max(0, Math.round(Number(req.body?.amount ?? existing.amount) || 0));
+    const notes = String(req.body?.notes ?? existing.notes ?? '').trim();
+
+    const updateRes = await pool.query(
+      `UPDATE operating_costs
+       SET cost_date = $1, category = $2, title = $3, amount = $4, notes = $5
+       WHERE id = $6
+       RETURNING *`,
+      [costDate, category, title, amount, notes, id]
+    );
+    return res.json(mapOperatingCostRow(updateRes.rows[0]));
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
+  }
+});
+
+app.delete('/api/tuition/costs/:id', async (req, res) => {
+  try {
+    await ensureDbReady();
+    const actor = await resolveTuitionActor(req);
+    if (!actor || actor.role !== 'admin') {
+      return res.status(403).json({ error: 'Chỉ Admin mới có quyền xóa chi phí vận hành.' });
+    }
+
+    const { id } = req.params;
+    await pool.query('DELETE FROM operating_costs WHERE id = $1', [id]);
     return res.json({ success: true, id });
   } catch (err: unknown) {
     return handleDbRouteError(res, err);

@@ -9,7 +9,6 @@ import {
   Activity,
   Bell,
   Printer,
-  Database,
   CheckCircle2,
   AlertTriangle,
   ChevronDown,
@@ -20,27 +19,20 @@ import {
 export const Header: React.FC = () => {
   const {
     currentUser,
+    isAdmin,
     logout,
-    role,
-    students,
-    selectedStudent,
-    setSelectedStudent,
     notifications,
     unreadNotificationCount,
     markNotificationRead,
     setOpenReportModal,
     setOpenStandardsModal,
-    dbStatus,
-    refreshDatabase,
   } = useHealth();
 
   const [showNotifications, setShowNotifications] = useState(false);
-  const [showStudentMenu, setShowStudentMenu] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
 
   const closeAllMenus = () => {
     setShowNotifications(false);
-    setShowStudentMenu(false);
     setShowUserMenu(false);
   };
 
@@ -60,7 +52,7 @@ export const Header: React.FC = () => {
 
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200 shadow-xs no-print">
-      {(showNotifications || showStudentMenu || showUserMenu) && (
+      {(showNotifications || showUserMenu) && (
         <div
           className="fixed inset-0 z-40 bg-slate-900/15 sm:bg-transparent"
           onClick={closeAllMenus}
@@ -86,66 +78,33 @@ export const Header: React.FC = () => {
             </div>
           </div>
 
-          {/* Database Live Status & Reference Tables Action */}
-          <div className="hidden lg:flex items-center space-x-3">
-            <button
-              onClick={() => setOpenStandardsModal(true)}
-              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 transition-colors border border-slate-200 cursor-pointer"
-              title="Xem bảng mỡ nội tạng, chiều cao cân nặng lý tưởng, thể hình 1-9"
-            >
-              <BookOpen className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Bảng Chỉ Số Cơ Thể</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => refreshDatabase()}
-              title={
-                dbStatus.connected
-                  ? `Đã kết nối PostgreSQL: ${dbStatus.host || 'Aiven Cloud'}`
-                  : dbStatus.error || 'Mất kết nối PostgreSQL - Bấm để thử kết nối lại'
-              }
-              className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg border text-xs transition-colors cursor-pointer ${
-                dbStatus.connected
-                  ? 'bg-slate-50 border-slate-200/80 text-slate-600 hover:bg-slate-100'
-                  : 'bg-rose-50 border-rose-300 text-rose-800 font-bold'
-              }`}
-            >
-              <Database
-                className={`w-3.5 h-3.5 ${
-                  dbStatus.connected ? 'text-emerald-600' : 'text-rose-600'
-                }`}
-              />
-              <span className="font-medium">Aiven DB:</span>
-              <span className="font-semibold">
-                {dbStatus.connected ? 'defaultdb' : 'Mất kết nối DB'}
-              </span>
-              <span className="flex h-2 w-2 relative">
-                <span
-                  className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                    dbStatus.connected ? 'bg-emerald-400' : 'bg-rose-400'
-                  }`}
-                ></span>
-                <span
-                  className={`relative inline-flex rounded-full h-2 w-2 ${
-                    dbStatus.connected ? 'bg-emerald-500' : 'bg-rose-600'
-                  }`}
-                ></span>
-              </span>
-            </button>
-          </div>
+          {/* Reference Tables Action (hidden for Admin) */}
+          {!isAdmin && (
+            <div className="hidden lg:flex items-center space-x-3">
+              <button
+                onClick={() => setOpenStandardsModal(true)}
+                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 transition-colors border border-slate-200 cursor-pointer"
+                title="Xem bảng mỡ nội tạng, chiều cao cân nặng lý tưởng, thể hình 1-9"
+              >
+                <BookOpen className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Bảng Chỉ Số Cơ Thể</span>
+              </button>
+            </div>
+          )}
 
           {/* Right Controls: Actions, Notifications & User Account */}
           <div className="flex items-center space-x-1.5 sm:space-x-3 shrink-0">
-            {/* Quick PDF Report Trigger */}
-            <button
-              onClick={() => setOpenReportModal(true)}
-              className="hidden sm:inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors border border-slate-200 cursor-pointer"
-              title="Xuất Báo Cáo In A4 Chuẩn SRS 3.5"
-            >
-              <Printer className="w-3.5 h-3.5 text-slate-600" />
-              <span>Báo Cáo PDF</span>
-            </button>
+            {/* Quick PDF Report Trigger (hidden for Admin) */}
+            {!isAdmin && (
+              <button
+                onClick={() => setOpenReportModal(true)}
+                className="hidden sm:inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors border border-slate-200 cursor-pointer"
+                title="Xuất Báo Cáo In A4 Chuẩn SRS 3.5"
+              >
+                <Printer className="w-3.5 h-3.5 text-slate-600" />
+                <span>Báo Cáo PDF</span>
+              </button>
+            )}
 
             {/* Smart Notifications Bell */}
             <div className="relative">
@@ -219,69 +178,6 @@ export const Header: React.FC = () => {
               )}
             </div>
 
-            {/* Trainer / Admin: Student Selector Dropdown */}
-            {(role === 'trainer' || role === 'admin') && (
-              <div className="relative">
-                <button
-                  onClick={() => {
-                    const next = !showStudentMenu;
-                    closeAllMenus();
-                    setShowStudentMenu(next);
-                  }}
-                  className="flex items-center space-x-1.5 sm:space-x-2 px-2.5 sm:px-3 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl transition-colors text-left cursor-pointer"
-                >
-                  <div className="min-w-0 max-w-[100px] sm:max-w-[160px]">
-                    <div className="text-xs font-bold text-slate-800 leading-tight truncate">
-                      {selectedStudent?.fullName || 'Chọn học viên'}
-                    </div>
-                    <div className="hidden sm:block text-[10px] text-emerald-700 font-semibold">
-                      Đang quản lý ({students.length})
-                    </div>
-                  </div>
-                  <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                </button>
-
-                {showStudentMenu && (
-                  <div className="fixed inset-x-3 top-[68px] sm:inset-x-auto sm:absolute sm:right-0 sm:top-full sm:mt-2 w-auto sm:w-64 max-h-[calc(100vh-5.5rem)] overflow-y-auto bg-white rounded-2xl sm:rounded-xl shadow-2xl sm:shadow-xl border border-slate-200 py-1.5 z-50">
-                    <div className="px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                      Chuyển đổi hồ sơ học viên
-                    </div>
-                    {students.length === 0 ? (
-                      <div className="px-3 py-4 text-center text-xs text-slate-400">
-                        Chưa có học viên nào
-                      </div>
-                    ) : (
-                      students.map((s) => (
-                        <button
-                          key={s.id}
-                          onClick={() => {
-                            setSelectedStudent(s);
-                            setShowStudentMenu(false);
-                          }}
-                          className={`w-full flex items-center space-x-2.5 px-3 py-2 text-xs text-left hover:bg-slate-50 transition-colors cursor-pointer ${
-                            selectedStudent?.id === s.id
-                              ? 'bg-emerald-50/80 font-bold text-emerald-900'
-                              : 'text-slate-700'
-                          }`}
-                        >
-                          <div className="flex-1 truncate">
-                            <div className="font-semibold truncate">{s.fullName}</div>
-                            <div className="text-[10px] text-slate-400">
-                              {s.phone}
-                              {s.trainerName ? ` • HLV: ${s.trainerName}` : ''}
-                            </div>
-                          </div>
-                          {selectedStudent?.id === s.id && (
-                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                          )}
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
             {/* User Account & Logout Menu */}
             <div className="relative">
               <button
@@ -316,27 +212,31 @@ export const Header: React.FC = () => {
                     </span>
                   </div>
 
-                  <button
-                    onClick={() => {
-                      setShowUserMenu(false);
-                      setOpenReportModal(true);
-                    }}
-                    className="sm:hidden w-full flex items-center space-x-2 px-4 py-2 text-xs text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
-                  >
-                    <Printer className="w-4 h-4 text-slate-600" />
-                    <span>Xuất Báo Cáo PDF</span>
-                  </button>
+                  {!isAdmin && (
+                    <>
+                      <button
+                        onClick={() => {
+                          setShowUserMenu(false);
+                          setOpenReportModal(true);
+                        }}
+                        className="sm:hidden w-full flex items-center space-x-2 px-4 py-2 text-xs text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+                      >
+                        <Printer className="w-4 h-4 text-slate-600" />
+                        <span>Xuất Báo Cáo PDF</span>
+                      </button>
 
-                  <button
-                    onClick={() => {
-                      setShowUserMenu(false);
-                      setOpenStandardsModal(true);
-                    }}
-                    className="w-full flex items-center space-x-2 px-4 py-2 text-xs text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
-                  >
-                    <BookOpen className="w-4 h-4 text-emerald-600" />
-                    <span>Tra Cứu Bảng Chỉ Số Cơ Thể</span>
-                  </button>
+                      <button
+                        onClick={() => {
+                          setShowUserMenu(false);
+                          setOpenStandardsModal(true);
+                        }}
+                        className="w-full flex items-center space-x-2 px-4 py-2 text-xs text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+                      >
+                        <BookOpen className="w-4 h-4 text-emerald-600" />
+                        <span>Tra Cứu Bảng Chỉ Số Cơ Thể</span>
+                      </button>
+                    </>
+                  )}
 
                   <button
                     onClick={() => {

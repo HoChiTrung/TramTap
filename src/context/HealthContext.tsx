@@ -42,6 +42,7 @@ interface HealthContextType {
     phone?: string;
     studentId?: string;
     trainerId?: string;
+    discountTier?: number;
   }) => Promise<{ success: boolean; user?: UserAccount; error?: string }>;
   updateUserAccount: (
     id: string,
@@ -52,6 +53,7 @@ interface HealthContextType {
       phone?: string;
       role?: UserRole;
       trainerId?: string;
+      discountTier?: number;
     }
   ) => Promise<{ success: boolean; error?: string }>;
   deleteUserAccount: (id: string) => Promise<{ success: boolean; error?: string }>;
