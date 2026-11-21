@@ -87,11 +87,19 @@ interface HealthContextType {
   // Operations
   addStudent: (
     student: Omit<StudentProfile, 'id' | 'createdAt'> & {
+      createAccount?: boolean;
       initialUsername?: string;
       initialPassword?: string;
     }
   ) => Promise<StudentProfile>;
-  updateStudent: (student: StudentProfile) => Promise<void>;
+  updateStudent: (
+    student: StudentProfile,
+    accountOptions?: {
+      createAccount?: boolean;
+      initialUsername?: string;
+      initialPassword?: string;
+    }
+  ) => Promise<void>;
   deleteStudent: (id: string) => Promise<void>;
   addMetricRecord: (record: Omit<HealthMetricRecord, 'id' | 'timestamp'>) => Promise<void>;
   deleteMetricRecord: (id: string) => Promise<void>;
@@ -547,6 +555,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Add Student -> Saves strictly to PostgreSQL database; throws error if DB is unreachable
   const addStudent = async (
     studentData: Omit<StudentProfile, 'id' | 'createdAt'> & {
+      createAccount?: boolean;
       initialUsername?: string;
       initialPassword?: string;
     }
@@ -562,16 +571,21 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         ? currentUser.fullName
         : '');
 
+    const shouldCreateAccount = studentData.createAccount !== false;
+    const ageNum = Number(studentData.age) || 25;
     const newStudent: StudentProfile = {
       fullName: studentData.fullName.trim(),
       gender: studentData.gender,
-      age: Number(studentData.age) || 25,
+      age: ageNum,
       height: Number(studentData.height) || 1.7,
       phone: studentData.phone.trim(),
       address: studentData.address?.trim() || '',
-      dateOfBirth: studentData.dateOfBirth || '2000-01-01',
+      dateOfBirth: studentData.dateOfBirth || `${new Date().getFullYear() - ageNum}-01-01`,
       healthGoal:
-        studentData.healthGoal?.trim() || 'Cân đối vóc dáng & Cải thiện sức khỏe toàn diện',
+        studentData.healthGoal?.trim() ||
+        (shouldCreateAccount
+          ? 'Cân đối vóc dáng & Cải thiện sức khỏe toàn diện'
+          : 'Tập luyện nâng cao sức khỏe'),
       targetMetrics: studentData.targetMetrics || {},
       avatarUrl: studentData.avatarUrl || '',
       trainerId: resolvedTrainerId,
@@ -590,8 +604,13 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         },
         body: JSON.stringify({
           ...newStudent,
-          initialUsername: studentData.initialUsername || studentData.phone,
-          initialPassword: studentData.initialPassword || '123',
+          createAccount: shouldCreateAccount,
+          ...(shouldCreateAccount
+            ? {
+                initialUsername: studentData.initialUsername || studentData.phone,
+                initialPassword: studentData.initialPassword || '123',
+              }
+            : {}),
         }),
       });
     } catch {
@@ -613,18 +632,36 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setDbError(null);
     setAllStudents((prev) => [saved, ...prev.filter((s) => s.id !== saved.id)]);
     setSelectedStudent(saved);
-    await fetchUsersList();
+    if (shouldCreateAccount) {
+      await fetchUsersList();
+    }
     return saved;
   };
 
   // Update Student -> Saves strictly to PostgreSQL database FIRST; throws error if DB fails
-  const updateStudent = async (student: StudentProfile) => {
+  const updateStudent = async (
+    student: StudentProfile,
+    accountOptions?: {
+      createAccount?: boolean;
+      initialUsername?: string;
+      initialPassword?: string;
+    }
+  ) => {
     let res: Response;
     try {
       res = await fetch(apiUrl(`/api/students/${student.id}`), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(student),
+        body: JSON.stringify({
+          ...student,
+          ...(accountOptions?.createAccount
+            ? {
+                createAccount: true,
+                initialUsername: accountOptions.initialUsername || student.phone,
+                initialPassword: accountOptions.initialPassword || '123',
+              }
+            : {}),
+        }),
       });
     } catch {
       setDbStatus((prev) => ({ ...prev, connected: false, error: DEFAULT_DB_DISCONNECTED_MSG }));
@@ -649,6 +686,9 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     );
     if (selectedStudent?.id === student.id) {
       setSelectedStudent({ ...student, ...savedStudent });
+    }
+    if (accountOptions?.createAccount) {
+      await fetchUsersList();
     }
 
     // Recalculate AI advice for latest measurement when target weight / duration changes

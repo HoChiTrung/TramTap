@@ -89,6 +89,7 @@ export const ContractFormModal: React.FC<ContractFormModalProps> = ({
   const [isManualProductCost, setIsManualProductCost] = useState(false);
 
   const [paidAmount, setPaidAmount] = useState<number>(0);
+  const [paidPreset, setPaidPreset] = useState<'none' | '50' | '100' | 'custom'>('none');
   const [allocationBasis, setAllocationBasis] = useState<AllocationBasis>('margin');
   const [allocations, setAllocations] = useState<ContractAllocations>({ trainer: 0, referrer: 0 });
   const [isManualAllocation, setIsManualAllocation] = useState(false);
@@ -152,6 +153,7 @@ export const ContractFormModal: React.FC<ContractFormModalProps> = ({
           savedCosts.referrerProductCost !== autoBom.referrerProductCost
       );
       setPaidAmount(editingContract.paidAmount);
+      setPaidPreset('custom');
       setAllocationBasis(editingContract.allocationBasis || 'margin');
       setAllocations({
         trainer: getTrainerAllocation(editingContract.allocations),
@@ -203,6 +205,7 @@ export const ContractFormModal: React.FC<ContractFormModalProps> = ({
     setReferrerProductCost(autoBom.referrerProductCost);
     setIsManualProductCost(false);
     setPaidAmount(0);
+    setPaidPreset('none');
     setAllocationBasis('margin');
     setIsManualAllocation(false);
     setAllocations(computeAutoAllocations(initBasis, defaultPkg?.defaultSplits, false));
@@ -234,6 +237,16 @@ export const ContractFormModal: React.FC<ContractFormModalProps> = ({
     () => getContractStatus(totalAmount, paidAmount),
     [totalAmount, paidAmount]
   );
+
+  // Keep paidAmount synced if user chose a quick-pay preset (50% / 100%) and then changes package/months
+  useEffect(() => {
+    if (!open) return;
+    if (paidPreset === '100') {
+      setPaidAmount(totalAmount);
+    } else if (paidPreset === '50') {
+      setPaidAmount(Math.round(totalAmount / 2));
+    }
+  }, [open, totalAmount, paidPreset]);
 
   // Live Herbalife BOM cost breakdown from selected package & tiers
   const autoBomResult = useMemo(
@@ -297,6 +310,18 @@ export const ContractFormModal: React.FC<ContractFormModalProps> = ({
       if (tr && tr.discountTier !== undefined) {
         setTrainerDiscountTier(normalizeDiscountTier(tr.discountTier, 50));
         setIsManualProductCost(false);
+      }
+    }
+    if (stu.targetMetrics?.trainingPackageId) {
+      const matchedPkg = packages.find((p) => p.id === stu.targetMetrics.trainingPackageId);
+      if (matchedPkg) {
+        setPackageId(matchedPkg.id);
+        setPackageName(matchedPkg.name);
+        setUnitPrice(matchedPkg.monthlyPrice);
+        setIsManualProductCost(false);
+        if (!editingContract) {
+          setDurationMonths(matchedPkg.defaultDurationMonths || 1);
+        }
       }
     }
   };
@@ -668,40 +693,86 @@ export const ContractFormModal: React.FC<ContractFormModalProps> = ({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-1">
+              <div className="sm:col-span-3 p-3 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between">
                 <div className="text-xs text-slate-500">Tổng học phí</div>
                 <div className="text-base font-bold font-mono tabular-nums text-slate-900 mt-1">
                   {formatVnd(totalAmount)}
                 </div>
               </div>
 
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+              <div className="sm:col-span-6 p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
                 <div className="flex items-center justify-between gap-2">
-                  <label className="text-xs text-slate-600 font-medium">Đã thanh toán (VNĐ)</label>
-                  <button
-                    type="button"
-                    onClick={() => setPaidAmount(totalAmount)}
-                    className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer whitespace-nowrap"
-                  >
-                    Đóng đủ 100%
-                  </button>
+                  <label className="text-xs text-slate-700 font-semibold">Đã thanh toán (VNĐ)</label>
+                  <span className="text-[11px] font-mono tabular-nums font-medium text-slate-500">
+                    {totalAmount > 0 ? `${Math.min(999, Math.round((paidAmount / totalAmount) * 100))}%` : '0%'}
+                  </span>
                 </div>
                 <input
                   type="number"
                   min={0}
                   step={10000}
                   value={paidAmount}
-                  onChange={(e) => setPaidAmount(Math.max(0, Number(e.target.value) || 0))}
-                  className="mt-1.5 w-full h-9 px-2.5 rounded-lg border border-slate-300 bg-white text-sm font-mono tabular-nums text-right font-semibold text-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-600"
+                  onChange={(e) => {
+                    setPaidPreset('custom');
+                    setPaidAmount(Math.max(0, Number(e.target.value) || 0));
+                  }}
+                  className="w-full h-9 px-2.5 rounded-lg border border-slate-300 bg-white text-sm font-mono tabular-nums text-right font-semibold text-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-600"
                 />
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={totalAmount <= 0}
+                    onClick={() => {
+                      setPaidPreset('100');
+                      setPaidAmount(totalAmount);
+                    }}
+                    className={`flex-1 min-w-[140px] h-8 px-3 rounded-lg text-xs font-semibold border transition-colors inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                      totalAmount > 0 && paidAmount === totalAmount
+                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                        : 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100'
+                    }`}
+                  >
+                    <Check className="w-3.5 h-3.5 shrink-0" />
+                    <span className="whitespace-nowrap">Đóng đủ 100%</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={totalAmount <= 0}
+                    onClick={() => {
+                      setPaidPreset('50');
+                      setPaidAmount(Math.round(totalAmount / 2));
+                    }}
+                    className={`h-8 px-2.5 rounded-lg text-xs font-semibold font-mono tabular-nums border transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                      totalAmount > 0 && paidAmount === Math.round(totalAmount / 2)
+                        ? 'bg-slate-800 text-white border-slate-800'
+                        : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                    }`}
+                  >
+                    50%
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPaidPreset('none');
+                      setPaidAmount(0);
+                    }}
+                    className={`h-8 px-2.5 rounded-lg text-xs font-semibold font-mono tabular-nums border transition-colors cursor-pointer ${
+                      paidAmount === 0
+                        ? 'bg-slate-800 text-white border-slate-800'
+                        : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100'
+                    }`}
+                  >
+                    0%
+                  </button>
+                </div>
               </div>
 
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between">
-                <div className="flex items-center justify-between text-xs">
+              <div className="sm:col-span-3 p-3 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between">
+                <div className="flex items-center justify-between text-xs gap-1">
                   <span className="text-slate-500">Còn nợ</span>
                   <span
-                    className={`font-semibold ${
+                    className={`font-semibold whitespace-nowrap ${
                       status === 'completed'
                         ? 'text-emerald-700'
                         : status === 'partial'

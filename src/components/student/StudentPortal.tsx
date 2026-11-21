@@ -55,7 +55,7 @@ export const StudentPortal: React.FC<StudentPortalProps> = ({ student }) => {
   const studentMeals = getStudentMeals(student.id);
 
   // Count used meal ticket portions
-  const totalPortions = student.targetMetrics?.totalMealPortions || 60;
+  const totalPortions = student.targetMetrics?.totalMealPortions ?? 60;
   const usedPortionsCount = studentMeals.reduce((acc, m) => {
     let c = 0;
     if (m.macros?.morningStatus === 'used' || m.macros?.morningStatus === 'takeaway') c += 1;

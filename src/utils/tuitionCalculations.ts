@@ -181,6 +181,45 @@ export function computePackageProductCosts(params: {
   };
 }
 
+/**
+ * Tự động xác định số khẩu phần phiếu bữa ăn dựa trên định mức sản phẩm (BOM) của gói luyện tập.
+ * - Gói chỉ tập luyện (không BOM khẩu phần) -> 0 khẩu phần
+ * - Gói 1tr5 / Gói 2tr5 (30 khẩu phần F1) -> 30 khẩu phần
+ * - Gói 3tr7 / Gói 5tr5 (30 + 30 khẩu phần F1) -> 60 khẩu phần
+ */
+export function getPackageMealPortions(
+  pkg: TuitionPackage | null | undefined,
+  products: HerbalifeProduct[]
+): number {
+  if (!pkg) return 0;
+  const productMap = new Map<string, HerbalifeProduct>();
+  for (const p of products) {
+    productMap.set(p.id, p);
+  }
+
+  let monthlyPortions = 0;
+  for (const item of pkg.bomItems || []) {
+    const qty = Number(item.quantity) || 0;
+    if (qty <= 0) continue;
+    const prod = productMap.get(item.productId);
+    const portionLabel = (prod?.portionUnitLabel || '').toLowerCase();
+    const prodName = (prod?.name || '').toLowerCase();
+    const isMealPortionProduct =
+      portionLabel.includes('khẩu phần') ||
+      item.productId === 'prod-f1' ||
+      prodName.includes('công thức 1') ||
+      /\bf1\b/i.test(prodName) ||
+      (prod ? prod.portionsPerUnit > 1 : false);
+
+    if (isMealPortionProduct) {
+      monthlyPortions += qty;
+    }
+  }
+
+  const duration = Math.max(0.5, Number(pkg.defaultDurationMonths) || 1);
+  return Math.min(360, Math.max(0, Math.round(monthlyPortions * duration)));
+}
+
 export function getContractProductCosts(contract: TuitionContract): {
   trainerProductCost: number;
   referrerProductCost: number;

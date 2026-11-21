@@ -22,7 +22,9 @@ export interface TargetMetrics {
   targetMuscleMass?: number; // kg
   targetSubcutaneousFat?: number; // %
   targetWaist?: number; // cm
-  totalMealPortions?: number; // Tổng số khẩu phần phiếu ăn (VD: 30 khẩu phần hoặc 60 khẩu phần)
+  totalMealPortions?: number; // Tổng số khẩu phần phiếu ăn (VD: 0, 30 hoặc 60 khẩu phần)
+  trainingPackageId?: string; // ID gói luyện tập đang đăng ký (từ danh mục gói tập)
+  trainingPackageName?: string; // Tên gói luyện tập đang đăng ký
 }
 
 export interface CalorieGoalBreakdown {

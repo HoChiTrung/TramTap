@@ -251,7 +251,7 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
       .map((s) => {
         const sMeals = meals.filter((m) => m.studentId === s.id);
         const sSlots = buildStudent30DaySlots(sMeals);
-        const sTotalPortions = s.targetMetrics?.totalMealPortions || 60;
+        const sTotalPortions = s.targetMetrics?.totalMealPortions ?? 60;
         const sStats = getStudentCardStats(sSlots, sTotalPortions);
         const dateSlot = sSlots.find(
           (slot) =>
@@ -533,7 +533,7 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
     return activeStudentSlots;
   }, [dayRangeFilter, compactStudentSlots, activeStudentSlots]);
 
-  const activeStudentTotalPortions = activeCardStudent?.targetMetrics?.totalMealPortions || 60;
+  const activeStudentTotalPortions = activeCardStudent?.targetMetrics?.totalMealPortions ?? 60;
 
   const activeStats = useMemo(
     () => getStudentCardStats(activeStudentSlots, activeStudentTotalPortions),
@@ -1135,9 +1135,20 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
 
             {mode === 'trainer' && (
               <div className="flex flex-wrap items-center gap-2">
-                {/* Package Selector: 30 vs 60 portions */}
+                {/* Package Selector: 0 vs 30 vs 60 portions */}
                 <div className="inline-flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
                   <span className="px-2 text-[11px] font-bold text-slate-500">Gói phiếu:</span>
+                  <button
+                    type="button"
+                    onClick={() => handleUpdatePackagePortions(activeCardStudent, 0)}
+                    className={`px-2 py-1 rounded-lg font-bold transition-colors cursor-pointer ${
+                      activeStats.totalPortions === 0
+                        ? 'bg-slate-800 text-white shadow-2xs'
+                        : 'text-slate-600 hover:bg-white'
+                    }`}
+                  >
+                    0 phần
+                  </button>
                   <button
                     type="button"
                     onClick={() => handleUpdatePackagePortions(activeCardStudent, 30)}
@@ -1176,7 +1187,7 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
                   >
                     {students.map((st) => (
                       <option key={st.id} value={st.id}>
-                        Xem thẻ 30 ngày: {st.fullName} ({st.targetMetrics?.totalMealPortions || 60} phần)
+                        Xem thẻ 30 ngày: {st.fullName} ({st.targetMetrics?.totalMealPortions ?? 60} phần)
                       </option>
                     ))}
                   </select>

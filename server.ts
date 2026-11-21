@@ -904,23 +904,32 @@ app.post('/api/students', async (req, res) => {
 
     const s = req.body;
     const studentId = s.id || `student-${Date.now()}`;
+    const shouldCreateAccount = s.createAccount !== false;
     const initialUsername = String(s.initialUsername || s.phone || studentId).trim();
     const initialPassword = String(s.initialPassword || '123').trim();
-    const safeDob = s.dateOfBirth && String(s.dateOfBirth).trim() ? s.dateOfBirth : '2000-01-01';
+    const ageNum = Number(s.age) || 25;
+    const safeDob =
+      s.dateOfBirth && String(s.dateOfBirth).trim()
+        ? s.dateOfBirth
+        : `${new Date().getFullYear() - ageNum}-01-01`;
     const safeGoal =
       s.healthGoal && String(s.healthGoal).trim()
         ? s.healthGoal.trim()
-        : 'Cân đối vóc dáng & Cải thiện sức khỏe';
+        : shouldCreateAccount
+        ? 'Cân đối vóc dáng & Cải thiện sức khỏe'
+        : 'Tập luyện nâng cao sức khỏe';
 
-    // Check if username already exists for another user in PostgreSQL
-    const dupUser = await pool.query(
-      'SELECT id, student_id FROM users WHERE LOWER(username) = LOWER($1)',
-      [initialUsername]
-    );
-    if (dupUser.rows.length > 0 && dupUser.rows[0].student_id !== studentId) {
-      return res.status(400).json({
-        error: `Tên đăng nhập "${initialUsername}" đã tồn tại trong Database! Vui lòng chọn tên đăng nhập khác.`,
-      });
+    // Check if username already exists for another user in PostgreSQL (only when creating account)
+    if (shouldCreateAccount) {
+      const dupUser = await pool.query(
+        'SELECT id, student_id FROM users WHERE LOWER(username) = LOWER($1)',
+        [initialUsername]
+      );
+      if (dupUser.rows.length > 0 && dupUser.rows[0].student_id !== studentId) {
+        return res.status(400).json({
+          error: `Tên đăng nhập "${initialUsername}" đã tồn tại trong Database! Vui lòng chọn tên đăng nhập khác.`,
+        });
+      }
     }
 
     // Resolve trainer ownership from PostgreSQL users table
@@ -949,7 +958,7 @@ app.post('/api/students', async (req, res) => {
       id: studentId,
       fullName: String(s.fullName || '').trim(),
       gender: s.gender || 'Nam',
-      age: Number(s.age) || 25,
+      age: ageNum,
       height: Number(s.height) || 1.7,
       phone: String(s.phone || '').trim().slice(0, 20),
       address: String(s.address || '').trim().slice(0, 255),
@@ -1000,27 +1009,29 @@ app.post('/api/students', async (req, res) => {
         ]
       );
 
-      await client.query(
-        `INSERT INTO users (id, username, password, full_name, role, phone, student_id, trainer_id, avatar_url)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         ON CONFLICT (username) DO UPDATE SET
-           password = EXCLUDED.password,
-           full_name = EXCLUDED.full_name,
-           phone = EXCLUDED.phone,
-           student_id = EXCLUDED.student_id,
-           trainer_id = EXCLUDED.trainer_id`,
-        [
-          `user-${newStudentRecord.id}`,
-          initialUsername,
-          initialPassword,
-          newStudentRecord.fullName,
-          'student',
-          newStudentRecord.phone,
-          newStudentRecord.id,
-          newStudentRecord.trainerId || null,
-          newStudentRecord.avatarUrl,
-        ]
-      );
+      if (shouldCreateAccount) {
+        await client.query(
+          `INSERT INTO users (id, username, password, full_name, role, phone, student_id, trainer_id, avatar_url)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (username) DO UPDATE SET
+             password = EXCLUDED.password,
+             full_name = EXCLUDED.full_name,
+             phone = EXCLUDED.phone,
+             student_id = EXCLUDED.student_id,
+             trainer_id = EXCLUDED.trainer_id`,
+          [
+            `user-${newStudentRecord.id}`,
+            initialUsername,
+            initialPassword,
+            newStudentRecord.fullName,
+            'student',
+            newStudentRecord.phone,
+            newStudentRecord.id,
+            newStudentRecord.trainerId || null,
+            newStudentRecord.avatarUrl,
+          ]
+        );
+      }
 
       await client.query('COMMIT');
     } catch (txErr) {
@@ -1030,7 +1041,11 @@ app.post('/api/students', async (req, res) => {
       client.release();
     }
 
-    return res.status(201).json({ ...newStudentRecord, initialUsername, initialPassword });
+    return res.status(201).json(
+      shouldCreateAccount
+        ? { ...newStudentRecord, initialUsername, initialPassword }
+        : newStudentRecord
+    );
   } catch (err: unknown) {
     return handleDbRouteError(res, err);
   }
@@ -1042,6 +1057,9 @@ app.put('/api/students/:id', async (req, res) => {
 
     const { id } = req.params;
     const s = req.body;
+    const shouldCreateAccount = s.createAccount === true;
+    const initialUsername = String(s.initialUsername || s.phone || id).trim();
+    const initialPassword = String(s.initialPassword || '123').trim();
 
     let resolvedTrainerName = s.trainerName !== undefined ? String(s.trainerName) : '';
     if (s.trainerId && !resolvedTrainerName) {
@@ -1051,46 +1069,101 @@ app.put('/api/students/:id', async (req, res) => {
       }
     }
 
+    if (shouldCreateAccount) {
+      const existingAcc = await pool.query('SELECT id FROM users WHERE student_id = $1', [id]);
+      if (existingAcc.rows.length === 0) {
+        const dupUser = await pool.query(
+          'SELECT id, student_id FROM users WHERE LOWER(username) = LOWER($1)',
+          [initialUsername]
+        );
+        if (dupUser.rows.length > 0 && dupUser.rows[0].student_id !== id) {
+          return res.status(400).json({
+            error: `Tên đăng nhập "${initialUsername}" đã tồn tại trong Database! Vui lòng chọn tên đăng nhập khác.`,
+          });
+        }
+      }
+    }
+
+    const ageNum = Number(s.age) || 25;
+    const safeDob =
+      s.dateOfBirth && String(s.dateOfBirth).trim()
+        ? s.dateOfBirth
+        : `${new Date().getFullYear() - ageNum}-01-01`;
+
+    const { createAccount: _ca, initialUsername: _iu, initialPassword: _ip, ...cleanBody } = s;
     const updatedStudent = {
-      ...s,
+      ...cleanBody,
       id,
+      dateOfBirth: safeDob,
       trainerId: s.trainerId || '',
       trainerName: resolvedTrainerName,
       targetMetrics: compactJson(s.targetMetrics),
     };
 
-    const result = await pool.query(
-      `UPDATE students SET
-        full_name = $1, gender = $2, age = $3, height = $4, phone = $5,
-        address = $6, date_of_birth = $7, health_goal = $8, target_metrics = $9, avatar_url = $10,
-        trainer_id = $11, trainer_name = $12
-       WHERE id = $13
-       RETURNING id`,
-      [
-        s.fullName,
-        s.gender,
-        s.age,
-        s.height,
-        s.phone,
-        s.address || '',
-        s.dateOfBirth || '2000-01-01',
-        s.healthGoal,
-        JSON.stringify(compactJson(s.targetMetrics)),
-        s.avatarUrl || '',
-        s.trainerId || null,
-        resolvedTrainerName || null,
-        id,
-      ]
-    );
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
 
-    if (result.rowCount === 0) {
-      return res.status(404).json({ error: 'Không tìm thấy hồ sơ học viên trong Database!' });
+      const result = await client.query(
+        `UPDATE students SET
+          full_name = $1, gender = $2, age = $3, height = $4, phone = $5,
+          address = $6, date_of_birth = $7, health_goal = $8, target_metrics = $9, avatar_url = $10,
+          trainer_id = $11, trainer_name = $12
+         WHERE id = $13
+         RETURNING id`,
+        [
+          s.fullName,
+          s.gender,
+          ageNum,
+          s.height,
+          s.phone,
+          s.address || '',
+          safeDob,
+          s.healthGoal,
+          JSON.stringify(compactJson(s.targetMetrics)),
+          s.avatarUrl || '',
+          s.trainerId || null,
+          resolvedTrainerName || null,
+          id,
+        ]
+      );
+
+      if (result.rowCount === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Không tìm thấy hồ sơ học viên trong Database!' });
+      }
+
+      const existingAcc = await client.query('SELECT id FROM users WHERE student_id = $1', [id]);
+      if (existingAcc.rows.length > 0) {
+        await client.query(
+          `UPDATE users SET full_name = $1, phone = $2, trainer_id = $3 WHERE student_id = $4`,
+          [s.fullName, s.phone || '', s.trainerId || null, id]
+        );
+      } else if (shouldCreateAccount) {
+        await client.query(
+          `INSERT INTO users (id, username, password, full_name, role, phone, student_id, trainer_id, avatar_url)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [
+            `user-${id}`,
+            initialUsername,
+            initialPassword,
+            s.fullName,
+            'student',
+            s.phone || '',
+            id,
+            s.trainerId || null,
+            s.avatarUrl || '',
+          ]
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      throw txErr;
+    } finally {
+      client.release();
     }
-
-    await pool.query(
-      `UPDATE users SET full_name = $1, phone = $2, trainer_id = $3 WHERE student_id = $4`,
-      [s.fullName, s.phone || '', s.trainerId || null, id]
-    );
 
     return res.json(updatedStudent);
   } catch (err: unknown) {
@@ -2379,6 +2452,23 @@ app.delete('/api/tuition/products/:id', async (req, res) => {
     const { id } = req.params;
     await pool.query('DELETE FROM herbalife_products WHERE id = $1', [id]);
     return res.json({ success: true, id });
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
+  }
+});
+
+// Read-only catalog of Tuition Packages & Herbalife Products (for Student registration & Tuition forms)
+app.get('/api/tuition/packages', async (req, res) => {
+  try {
+    await ensureDbReady();
+    const [packagesRes, productsRes] = await Promise.all([
+      pool.query('SELECT * FROM tuition_packages ORDER BY sort_order ASC, created_at ASC'),
+      pool.query('SELECT * FROM herbalife_products ORDER BY sort_order ASC, created_at ASC'),
+    ]);
+    return res.json({
+      packages: packagesRes.rows.map(mapTuitionPackageRow),
+      products: productsRes.rows.map(mapHerbalifeProductRow),
+    });
   } catch (err: unknown) {
     return handleDbRouteError(res, err);
   }
