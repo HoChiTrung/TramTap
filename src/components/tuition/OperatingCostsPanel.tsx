@@ -213,8 +213,8 @@ export const OperatingCostsPanel: React.FC<OperatingCostsPanelProps> = ({
             <label className="block text-xs font-medium text-slate-600 mb-1">Số tiền (VNĐ)</label>
             <input
               type="number"
-              min={1000}
-              step={10000}
+              min={1}
+              step={1}
               value={amount}
               onChange={(e) => setAmount(Math.max(0, Number(e.target.value) || 0))}
               required

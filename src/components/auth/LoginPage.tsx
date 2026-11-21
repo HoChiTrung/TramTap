@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import { useHealth } from '../../context/HealthContext';
+import { APP_VERSION, APP_BUILD_TIME } from '../../utils/appVersion';
 import {
   Activity,
   Lock,
@@ -44,9 +45,17 @@ export const LoginPage: React.FC = () => {
           <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-emerald-600 via-teal-600 to-cyan-500 text-white flex items-center justify-center mx-auto shadow-lg shadow-emerald-500/25 mb-4">
             <Activity className="w-8 h-8 stroke-[2.5]" />
           </div>
-          <h1 className="text-2xl font-black text-slate-900 tracking-tight">
-            FitTrack Pro
-          </h1>
+          <div className="inline-flex items-center justify-center gap-2">
+            <h1 className="text-2xl font-black text-slate-900 tracking-tight">
+              FitTrack Pro
+            </h1>
+            <span
+              title={APP_BUILD_TIME ? `Phiên bản ${APP_VERSION} · Build ${APP_BUILD_TIME}` : `Phiên bản ${APP_VERSION}`}
+              className="px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-700 font-mono tabular-nums text-xs font-bold tracking-tight leading-none"
+            >
+              {APP_VERSION}
+            </span>
+          </div>
           <p className="text-xs text-slate-500 mt-1 font-medium">
             Hệ thống Quản lý & Phân tích 10 Chỉ số Sức khỏe Sinh học
           </p>

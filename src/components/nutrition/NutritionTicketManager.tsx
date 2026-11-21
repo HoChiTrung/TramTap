@@ -184,17 +184,30 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
   const [inspectCardStudent, setInspectCardStudent] = useState<StudentProfile | null>(null);
   const [dayRangeFilter, setDayRangeFilter] = useState<'COMPACT' | '1-10' | '11-20' | '21-30' | 'ALL'>('COMPACT');
 
-  const activeCardStudent =
-    inspectCardStudent || focusedStudent || selectedStudent || students[0] || null;
+  // Only students with a meal-ticket package (> 0 portions) appear in bulk meal-ticket marking
+  const mealTicketStudents = useMemo(
+    () => students.filter((s) => (s.targetMetrics?.totalMealPortions ?? 60) > 0),
+    [students]
+  );
 
-  // Available dates where metrics were recorded (sorted newest first)
+  const mealTicketStudentIdSet = useMemo(
+    () => new Set(mealTicketStudents.map((s) => s.id)),
+    [mealTicketStudents]
+  );
+
+  const trainingOnlyStudentCount = students.length - mealTicketStudents.length;
+
+  const activeCardStudent =
+    inspectCardStudent || focusedStudent || selectedStudent || mealTicketStudents[0] || students[0] || null;
+
+  // Available dates where metrics were recorded for meal-ticket students (sorted newest first)
   const metricDates = useMemo(() => {
     const set = new Set<string>();
     for (const m of metrics) {
-      if (m.date) set.add(m.date);
+      if (m.date && mealTicketStudentIdSet.has(m.studentId)) set.add(m.date);
     }
     return Array.from(set).sort((a, b) => b.localeCompare(a));
-  }, [metrics]);
+  }, [metrics, mealTicketStudentIdSet]);
 
   // Map of metrics on selectedDate
   const metricByStudentOnDate = useMemo(() => {
@@ -245,9 +258,9 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
     );
   };
 
-  // Build enriched student rows for the Multi-Student Batch Table
+  // Build enriched student rows for the Multi-Student Batch Table (only students with meal portions > 0)
   const enrichedStudentRows = useMemo(() => {
-    return students
+    return mealTicketStudents
       .map((s) => {
         const sMeals = meals.filter((m) => m.studentId === s.id);
         const sSlots = buildStudent30DaySlots(sMeals);
@@ -298,11 +311,11 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
         }
         return true;
       });
-  }, [students, meals, selectedDate, metricByStudentOnDate, searchQuery, studentFilter]);
+  }, [mealTicketStudents, meals, selectedDate, metricByStudentOnDate, searchQuery, studentFilter]);
 
   const weighedCountOnDate = useMemo(
-    () => students.filter((s) => metricByStudentOnDate.has(s.id)).length,
-    [students, metricByStudentOnDate]
+    () => mealTicketStudents.filter((s) => metricByStudentOnDate.has(s.id)).length,
+    [mealTicketStudents, metricByStudentOnDate]
   );
 
   // Toggle single student selection
@@ -324,9 +337,9 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
     }
   };
 
-  // Select all students who weighed in on selectedDate
+  // Select all meal-ticket students who weighed in on selectedDate
   const handleSelectWeighedToday = () => {
-    const weighedIds = students
+    const weighedIds = mealTicketStudents
       .filter((s) => metricByStudentOnDate.has(s.id))
       .map((s) => s.id);
     setSelectedStudentIds(weighedIds);
@@ -383,12 +396,13 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
       | 'WEIGHED_NO_MEAL'
       | 'CLEAR_DAY'
   ) => {
-    if (selectedStudentIds.length === 0) return;
+    const validStudentIds = selectedStudentIds.filter((id) => mealTicketStudentIdSet.has(id));
+    if (validStudentIds.length === 0) return;
     setIsBatchProcessing(true);
     setBatchFeedback(null);
 
     try {
-      for (const studentId of selectedStudentIds) {
+      for (const studentId of validStudentIds) {
         const slot = resolveSlotForStudentOnDate(studentId, selectedDate);
         if (preset === 'BOTH_USED') {
           await upsertMealTicket({
@@ -453,7 +467,7 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
         }
       }
       setBatchFeedback(
-        `Đã cập nhật phiếu ăn ngày ${selectedDate} cho ${selectedStudentIds.length} học viên cùng lúc!`
+        `Đã cập nhật phiếu ăn ngày ${selectedDate} cho ${validStudentIds.length} học viên cùng lúc!`
       );
       setTimeout(() => setBatchFeedback(null), 3500);
     } finally {
@@ -577,8 +591,13 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
                     Đánh Phiếu Sử Dụng Bữa Ăn Cùng Lúc Nhiều Học Viên
                   </h3>
                   <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                    {students.length} học viên
+                    {mealTicketStudents.length} học viên có phiếu ăn
                   </span>
+                  {trainingOnlyStudentCount > 0 && (
+                    <span className="text-[11px] text-slate-400 font-medium">
+                      (Đã ẩn {trainingOnlyStudentCount} HV chỉ tập · 0 phần ăn)
+                    </span>
+                  )}
                 </div>
                 <p className="text-xs text-slate-500 mt-0.5">
                   Chọn nhiều học viên để đánh phiếu đồng loạt chỉ với 1 cú nhấp chuột, hoặc bấm trực tiếp vào cột{' '}
@@ -619,7 +638,9 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
             <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
               <span className="text-slate-400 font-semibold mr-1">Ngày có HV cân đo:</span>
               {metricDates.slice(0, 7).map((d) => {
-                const count = metrics.filter((m) => m.date === d).length;
+                const count = metrics.filter(
+                  (m) => m.date === d && mealTicketStudentIdSet.has(m.studentId)
+                ).length;
                 const active = d === selectedDate;
                 return (
                   <button
@@ -652,7 +673,7 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
                 }`}
               >
                 <Users className="w-3.5 h-3.5" />
-                <span>Tất cả học viên ({students.length})</span>
+                <span>Tất cả có phiếu ăn ({mealTicketStudents.length})</span>
               </button>
 
               <button
@@ -810,15 +831,17 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
             <div className="p-8 rounded-2xl bg-slate-50 border border-dashed border-slate-200 text-center space-y-2">
               <Utensils className="w-8 h-8 text-slate-300 mx-auto" />
               <div className="text-xs font-bold text-slate-700">
-                Không có học viên nào trong bộ lọc hiện tại
+                {mealTicketStudents.length === 0
+                  ? 'Chưa có học viên nào đăng ký gói có phiếu bữa ăn (> 0 khẩu phần)'
+                  : 'Không có học viên nào trong bộ lọc hiện tại'}
               </div>
-              {studentFilter !== 'ALL' && (
+              {studentFilter !== 'ALL' && mealTicketStudents.length > 0 && (
                 <button
                   type="button"
                   onClick={() => setStudentFilter('ALL')}
                   className="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-bold cursor-pointer"
                 >
-                  Xem tất cả {students.length} học viên
+                  Xem tất cả {mealTicketStudents.length} học viên có phiếu ăn
                 </button>
               )}
             </div>
@@ -1173,11 +1196,11 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
                   </button>
                 </div>
 
-                {students.length > 1 && (
+                {mealTicketStudents.length > 1 && (
                   <select
                     value={activeCardStudent.id}
                     onChange={(e) => {
-                      const found = students.find((st) => st.id === e.target.value);
+                      const found = mealTicketStudents.find((st) => st.id === e.target.value);
                       if (found) {
                         setInspectCardStudent(found);
                         setSelectedStudent(found);
@@ -1185,7 +1208,7 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
                     }}
                     className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-hidden"
                   >
-                    {students.map((st) => (
+                    {mealTicketStudents.map((st) => (
                       <option key={st.id} value={st.id}>
                         Xem thẻ 30 ngày: {st.fullName} ({st.targetMetrics?.totalMealPortions ?? 60} phần)
                       </option>

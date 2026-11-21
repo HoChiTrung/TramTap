@@ -363,7 +363,7 @@ export const TuitionSettingsPanel: React.FC<TuitionSettingsPanelProps> = ({
               <input
                 type="number"
                 min={0}
-                step={50000}
+                step={1}
                 value={pkgPrice}
                 onChange={(e) => setPkgPrice(Math.max(0, Number(e.target.value) || 0))}
                 className="w-full h-10 px-3 rounded-lg border border-slate-300 bg-white text-sm font-mono tabular-nums text-right text-slate-900 focus:outline-none focus:border-emerald-600"
@@ -755,7 +755,7 @@ export const TuitionSettingsPanel: React.FC<TuitionSettingsPanelProps> = ({
                   <input
                     type="number"
                     min={0}
-                    step={1000}
+                    step={1}
                     value={prodPrices[String(tier)] ?? 0}
                     onChange={(e) =>
                       setProdPrices((prev) => ({

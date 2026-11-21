@@ -145,8 +145,8 @@ export const QuickPaymentModal: React.FC<QuickPaymentModalProps> = ({
             </div>
             <input
               type="number"
-              min={1000}
-              step={10000}
+              min={1}
+              step={1}
               value={amount}
               onChange={(e) => setAmount(Math.max(0, Number(e.target.value) || 0))}
               required

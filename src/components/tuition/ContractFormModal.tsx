@@ -671,7 +671,7 @@ export const ContractFormModal: React.FC<ContractFormModalProps> = ({
                 <input
                   type="number"
                   min={0}
-                  step={10000}
+                  step={1}
                   value={unitPrice}
                   onChange={(e) => setUnitPrice(Math.max(0, Number(e.target.value) || 0))}
                   className="w-full h-10 px-3 rounded-lg border border-slate-300 text-sm font-mono tabular-nums text-right text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-600"
@@ -711,7 +711,7 @@ export const ContractFormModal: React.FC<ContractFormModalProps> = ({
                 <input
                   type="number"
                   min={0}
-                  step={10000}
+                  step={1}
                   value={paidAmount}
                   onChange={(e) => {
                     setPaidPreset('custom');
@@ -885,7 +885,7 @@ export const ContractFormModal: React.FC<ContractFormModalProps> = ({
                   <input
                     type="number"
                     min={0}
-                    step={1000}
+                    step={1}
                     value={trainerProductCost}
                     onChange={(e) => {
                       setIsManualProductCost(true);
@@ -964,7 +964,7 @@ export const ContractFormModal: React.FC<ContractFormModalProps> = ({
                   <input
                     type="number"
                     min={0}
-                    step={1000}
+                    step={1}
                     value={referrerProductCost}
                     onChange={(e) => {
                       setIsManualProductCost(true);
@@ -1064,7 +1064,7 @@ export const ContractFormModal: React.FC<ContractFormModalProps> = ({
                 <input
                   type="number"
                   min={0}
-                  step={1000}
+                  step={1}
                   value={allocations.trainer || 0}
                   onChange={(e) => handleManualAllocationChange('trainer', e.target.value)}
                   className="w-full h-9 px-2.5 rounded-lg border border-slate-300 text-sm font-mono tabular-nums text-right font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-600"
@@ -1093,7 +1093,7 @@ export const ContractFormModal: React.FC<ContractFormModalProps> = ({
                 <input
                   type="number"
                   min={0}
-                  step={1000}
+                  step={1}
                   value={allocations.referrer || 0}
                   onChange={(e) => handleManualAllocationChange('referrer', e.target.value)}
                   className="w-full h-9 px-2.5 rounded-lg border border-slate-300 text-sm font-mono tabular-nums text-right font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-600"

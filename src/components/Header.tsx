@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import { useHealth } from '../context/HealthContext';
+import { APP_VERSION, APP_BUILD_TIME } from '../utils/appVersion';
 import {
   Activity,
   Bell,
@@ -67,9 +68,15 @@ export const Header: React.FC = () => {
               <Activity className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5]" />
             </div>
             <div className="min-w-0">
-              <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-1.5 sm:space-x-2">
                 <span className="font-extrabold text-base sm:text-lg tracking-tight bg-gradient-to-r from-slate-900 via-slate-800 to-emerald-700 bg-clip-text text-transparent truncate">
                   FitTrack Pro
+                </span>
+                <span
+                  title={APP_BUILD_TIME ? `Phiên bản ${APP_VERSION} · Build ${APP_BUILD_TIME}` : `Phiên bản ${APP_VERSION}`}
+                  className="px-1.5 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-700 font-mono tabular-nums text-[10px] sm:text-[11px] font-bold tracking-tight shrink-0 leading-none"
+                >
+                  {APP_VERSION}
                 </span>
               </div>
               <p className="hidden sm:block text-xs text-slate-500 font-medium truncate">
