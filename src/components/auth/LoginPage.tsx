@@ -6,8 +6,8 @@
 import React, { useState } from 'react';
 import { useHealth } from '../../context/HealthContext';
 import { APP_VERSION, APP_BUILD_TIME } from '../../utils/appVersion';
+import { PWAInstallButton } from '../common/PWAInstallButton';
 import {
-  Activity,
   Lock,
   User,
   ArrowRight,
@@ -42,9 +42,11 @@ export const LoginPage: React.FC = () => {
 
         {/* Brand Header */}
         <div className="text-center mb-8">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-emerald-600 via-teal-600 to-cyan-500 text-white flex items-center justify-center mx-auto shadow-lg shadow-emerald-500/25 mb-4">
-            <Activity className="w-8 h-8 stroke-[2.5]" />
-          </div>
+          <img
+            src="./pwa-192x192.png"
+            alt="FitTrack Pro"
+            className="w-16 h-16 rounded-2xl mx-auto shadow-lg shadow-emerald-500/25 mb-4 object-cover"
+          />
           <div className="inline-flex items-center justify-center gap-2">
             <h1 className="text-2xl font-black text-slate-900 tracking-tight">
               FitTrack Pro
@@ -119,6 +121,8 @@ export const LoginPage: React.FC = () => {
             <ArrowRight className="w-4 h-4" />
           </button>
         </form>
+
+        <PWAInstallButton variant="login" />
       </div>
     </div>
   );

@@ -6,8 +6,8 @@
 import React, { useState } from 'react';
 import { useHealth } from '../context/HealthContext';
 import { APP_VERSION, APP_BUILD_TIME } from '../utils/appVersion';
+import { PWAInstallButton } from './common/PWAInstallButton';
 import {
-  Activity,
   Bell,
   Printer,
   CheckCircle2,
@@ -64,9 +64,11 @@ export const Header: React.FC = () => {
         <div className="flex items-center justify-between h-16 gap-2">
           {/* Logo & Brand */}
           <div className="flex items-center space-x-2.5 sm:space-x-3 min-w-0">
-            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-emerald-600 via-teal-600 to-cyan-500 flex items-center justify-center text-white shadow-md shadow-emerald-500/20 shrink-0">
-              <Activity className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5]" />
-            </div>
+            <img
+              src="./pwa-192x192.png"
+              alt="FitTrack Pro"
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl shadow-md shadow-emerald-500/20 shrink-0 object-cover"
+            />
             <div className="min-w-0">
               <div className="flex items-center space-x-1.5 sm:space-x-2">
                 <span className="font-extrabold text-base sm:text-lg tracking-tight bg-gradient-to-r from-slate-900 via-slate-800 to-emerald-700 bg-clip-text text-transparent truncate">
@@ -101,6 +103,9 @@ export const Header: React.FC = () => {
 
           {/* Right Controls: Actions, Notifications & User Account */}
           <div className="flex items-center space-x-1.5 sm:space-x-3 shrink-0">
+            {/* In-App PWA Install Trigger (auto-hides when installed) */}
+            <PWAInstallButton variant="header" />
+
             {/* Quick PDF Report Trigger (hidden for Admin) */}
             {!isAdmin && (
               <button

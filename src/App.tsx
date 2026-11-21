@@ -15,6 +15,7 @@ import { TrainerManagementView } from './components/admin/TrainerManagementView'
 import { TuitionDashboardView } from './components/tuition/TuitionDashboardView';
 import { PrintableReportModal } from './components/reports/PrintableReportModal';
 import { ReferenceStandardsModal } from './components/common/ReferenceStandardsModal';
+import { OfflineIndicator } from './components/common/OfflineIndicator';
 import {
   Users,
   ShieldCheck,
@@ -244,6 +245,7 @@ export default function App() {
   return (
     <HealthProvider>
       <MainApp />
+      <OfflineIndicator />
     </HealthProvider>
   );
 }
