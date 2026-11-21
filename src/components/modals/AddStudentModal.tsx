@@ -9,8 +9,7 @@ import { HerbalifeProduct, TuitionPackage } from '../../types/tuition';
 import { useHealth } from '../../context/HealthContext';
 import { calculateCalorieGoalBreakdown } from '../../utils/healthCalculations';
 import { formatVnd, getPackageMealPortions } from '../../utils/tuitionCalculations';
-import { apiUrl } from '../../utils/api';
-import { X, UserPlus, Target, Flame, UserCheck, Utensils, Layers, Info } from 'lucide-react';
+import { X, UserPlus, Target, Flame, UserCheck, Utensils, Layers, Info, RefreshCw } from 'lucide-react';
 
 interface AddStudentModalProps {
   initialStudent?: StudentProfile;
@@ -29,6 +28,9 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
     isAdmin,
     trainers,
     users,
+    tuitionPackages,
+    herbalifeProducts,
+    refreshTuitionCatalog,
   } = useHealth();
   const studentMetrics = initialStudent ? getStudentMetrics(initialStudent.id) : [];
   const latestMetric = studentMetrics[studentMetrics.length - 1];
@@ -43,10 +45,11 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
     initialStudent?.trainerId || currentUser?.id || ''
   );
 
-  // Training Package Catalog (fetched from existing tuition packages)
-  const [packages, setPackages] = useState<TuitionPackage[]>([]);
-  const [products, setProducts] = useState<HerbalifeProduct[]>([]);
+  // Training Package Catalog (preloaded from HealthContext + refreshed on open with /api/tuition/bootstrap fallback)
+  const [packages, setPackages] = useState<TuitionPackage[]>(tuitionPackages);
+  const [products, setProducts] = useState<HerbalifeProduct[]>(herbalifeProducts);
   const [isLoadingPackages, setIsLoadingPackages] = useState(false);
+  const [packagesLoadError, setPackagesLoadError] = useState(false);
   const [trainingPackageId, setTrainingPackageId] = useState(
     initialStudent?.targetMetrics?.trainingPackageId || ''
   );
@@ -62,23 +65,45 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
   );
 
   useEffect(() => {
+    if (tuitionPackages.length > 0) setPackages(tuitionPackages);
+    if (herbalifeProducts.length > 0) setProducts(herbalifeProducts);
+  }, [tuitionPackages, herbalifeProducts]);
+
+  const loadPackages = async () => {
+    setIsLoadingPackages(packages.length === 0);
+    setPackagesLoadError(false);
+    const catalog = await refreshTuitionCatalog();
+    if (catalog) {
+      setPackages(catalog.packages);
+      setProducts(catalog.products);
+      setPackagesLoadError(false);
+    } else if (packages.length === 0) {
+      setPackagesLoadError(true);
+    }
+    setIsLoadingPackages(false);
+  };
+
+  useEffect(() => {
     let active = true;
-    setIsLoadingPackages(true);
-    fetch(apiUrl('/api/tuition/packages'))
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (!active || !data) return;
-        if (Array.isArray(data.packages)) setPackages(data.packages);
-        if (Array.isArray(data.products)) setProducts(data.products);
-      })
-      .catch(() => null)
-      .finally(() => {
-        if (active) setIsLoadingPackages(false);
-      });
+    const run = async () => {
+      if (tuitionPackages.length === 0) setIsLoadingPackages(true);
+      setPackagesLoadError(false);
+      const catalog = await refreshTuitionCatalog();
+      if (!active) return;
+      if (catalog) {
+        setPackages(catalog.packages);
+        setProducts(catalog.products);
+        setPackagesLoadError(false);
+      } else if (tuitionPackages.length === 0) {
+        setPackagesLoadError(true);
+      }
+      setIsLoadingPackages(false);
+    };
+    run();
     return () => {
       active = false;
     };
-  }, []);
+  }, [refreshTuitionCatalog]);
 
   const availablePackages = useMemo(
     () =>
@@ -443,6 +468,19 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
                   );
                 })}
               </select>
+              {packagesLoadError && availablePackages.length === 0 && (
+                <div className="flex items-center justify-between gap-2 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                  <span>Chưa tải được danh sách gói tập từ máy chủ.</span>
+                  <button
+                    type="button"
+                    onClick={loadPackages}
+                    className="inline-flex items-center gap-1 font-bold text-emerald-700 hover:text-emerald-800 cursor-pointer shrink-0"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    <span>Tải lại</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Step 2: Meal Ticket Portions Package (auto-selected from Training Package) */}

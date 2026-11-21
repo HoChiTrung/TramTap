@@ -18,6 +18,7 @@ import {
   AuthUser,
   UserAccount,
 } from '../types/health';
+import { HerbalifeProduct, TuitionPackage } from '../types/tuition';
 import {
   generateInstantAIAdvice,
   detectAnomalies,
@@ -83,6 +84,12 @@ interface HealthContextType {
   dbError: string | null;
   clearDbError: () => void;
   refreshDatabase: () => Promise<void>;
+  tuitionPackages: TuitionPackage[];
+  herbalifeProducts: HerbalifeProduct[];
+  refreshTuitionCatalog: () => Promise<{
+    packages: TuitionPackage[];
+    products: HerbalifeProduct[];
+  } | null>;
 
   // Operations
   addStudent: (
@@ -180,6 +187,8 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [photos, setPhotos] = useState<PhysiquePhoto[]>([]);
   const [badges] = useState<Badge[]>([]);
   const [notifications, setNotifications] = useState<SmartNotification[]>([]);
+  const [tuitionPackages, setTuitionPackages] = useState<TuitionPackage[]>([]);
+  const [herbalifeProducts, setHerbalifeProducts] = useState<HerbalifeProduct[]>([]);
 
   const [dbStatus, setDbStatus] = useState<{
     connected: boolean;
@@ -292,6 +301,53 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, []);
 
+  const refreshTuitionCatalog = useCallback(async () => {
+    const parseCatalogResponse = async (res: Response | null) => {
+      if (!res || !res.ok) return null;
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) return null;
+      const data = await res.json().catch(() => null);
+      if (!data || !Array.isArray(data.packages)) return null;
+      return {
+        packages: data.packages as TuitionPackage[],
+        products: Array.isArray(data.products) ? (data.products as HerbalifeProduct[]) : [],
+      };
+    };
+
+    try {
+      // Primary endpoint: lightweight read-only packages + products catalog
+      const primaryRes = await fetch(apiUrl('/api/tuition/packages')).catch(() => null);
+      const primaryData = await parseCatalogResponse(primaryRes);
+      if (primaryData && primaryData.packages.length > 0) {
+        setTuitionPackages(primaryData.packages);
+        setHerbalifeProducts(primaryData.products);
+        return primaryData;
+      }
+
+      // Fallback endpoint: /api/tuition/bootstrap (works even if backend hasn't rolled out GET /api/tuition/packages yet)
+      if (currentUser?.username) {
+        const fallbackRes = await fetch(apiUrl('/api/tuition/bootstrap'), {
+          headers: { 'x-auth-username': currentUser.username },
+        }).catch(() => null);
+        const fallbackData = await parseCatalogResponse(fallbackRes);
+        if (fallbackData) {
+          setTuitionPackages(fallbackData.packages);
+          setHerbalifeProducts(fallbackData.products);
+          return fallbackData;
+        }
+      }
+
+      if (primaryData) {
+        setTuitionPackages(primaryData.packages);
+        setHerbalifeProducts(primaryData.products);
+        return primaryData;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }, [currentUser?.username]);
+
   // Load all data directly from PostgreSQL database API (Never from local storage)
   const refreshDatabase = useCallback(async () => {
     try {
@@ -381,6 +437,10 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   useEffect(() => {
     refreshDatabase();
   }, [refreshDatabase]);
+
+  useEffect(() => {
+    refreshTuitionCatalog();
+  }, [refreshTuitionCatalog]);
 
   // Login handler against PostgreSQL Database
   const login = async (username: string, pass: string) => {
@@ -1220,6 +1280,9 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         dbError,
         clearDbError,
         refreshDatabase,
+        tuitionPackages,
+        herbalifeProducts,
+        refreshTuitionCatalog,
         addStudent,
         updateStudent,
         deleteStudent,
