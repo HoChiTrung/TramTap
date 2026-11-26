@@ -139,7 +139,42 @@ const HealthContext = createContext<HealthContextType | undefined>(undefined);
 const DEFAULT_DB_DISCONNECTED_MSG =
   'Không thể kết nối đến Cơ sở dữ liệu PostgreSQL (Aiven Cloud). Hệ thống KHÔNG lưu vào bộ nhớ tạm của trình duyệt để tránh mất dữ liệu. Vui lòng kiểm tra lại kết nối Database!';
 
-// Cleanup any legacy cached data in browser localStorage so the app never uses temporary browser data
+const SWR_CACHE_KEY = 'tramtap_swr_cache_v1';
+
+interface SwrCachePayload {
+  users?: UserAccount[];
+  students?: StudentProfile[];
+  metrics?: HealthMetricRecord[];
+  advices?: AIAdviceRecord[];
+  meals?: MealLog[];
+  workouts?: WorkoutLog[];
+  photos?: PhysiquePhoto[];
+  notifications?: SmartNotification[];
+  tuitionPackages?: TuitionPackage[];
+  herbalifeProducts?: HerbalifeProduct[];
+}
+
+function readSwrCache(): SwrCachePayload {
+  try {
+    const raw = localStorage.getItem(SWR_CACHE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSwrCache(partial: SwrCachePayload) {
+  try {
+    const current = readSwrCache();
+    localStorage.setItem(SWR_CACHE_KEY, JSON.stringify({ ...current, ...partial }));
+  } catch {
+    // Ignore quota or storage errors
+  }
+}
+
+// Cleanup any legacy cached data in browser localStorage so the app never uses stale sample data
 function purgeLegacySampleCache() {
   try {
     const keysToRemove = [
@@ -166,6 +201,7 @@ function purgeLegacySampleCache() {
 
 export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   purgeLegacySampleCache();
+  const initialCache = useMemo(() => readSwrCache(), []);
 
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
     try {
@@ -177,18 +213,42 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   });
 
   const [role, setRole] = useState<UserRole>(currentUser?.role || 'trainer');
-  const [users, setUsers] = useState<UserAccount[]>([]);
-  const [allStudents, setAllStudents] = useState<StudentProfile[]>([]);
-  const [selectedStudent, setSelectedStudent] = useState<StudentProfile | null>(null);
-  const [metrics, setMetrics] = useState<HealthMetricRecord[]>([]);
-  const [advices, setAdvices] = useState<AIAdviceRecord[]>([]);
-  const [meals, setMeals] = useState<MealLog[]>([]);
-  const [workouts, setWorkouts] = useState<WorkoutLog[]>([]);
-  const [photos, setPhotos] = useState<PhysiquePhoto[]>([]);
+  const [users, setUsers] = useState<UserAccount[]>(() =>
+    Array.isArray(initialCache.users) ? initialCache.users : []
+  );
+  const [allStudents, setAllStudents] = useState<StudentProfile[]>(() =>
+    Array.isArray(initialCache.students) ? initialCache.students : []
+  );
+  const [selectedStudent, setSelectedStudent] = useState<StudentProfile | null>(() =>
+    Array.isArray(initialCache.students) && initialCache.students.length > 0
+      ? initialCache.students[0]
+      : null
+  );
+  const [metrics, setMetrics] = useState<HealthMetricRecord[]>(() =>
+    Array.isArray(initialCache.metrics) ? initialCache.metrics : []
+  );
+  const [advices, setAdvices] = useState<AIAdviceRecord[]>(() =>
+    Array.isArray(initialCache.advices) ? initialCache.advices : []
+  );
+  const [meals, setMeals] = useState<MealLog[]>(() =>
+    Array.isArray(initialCache.meals) ? initialCache.meals : []
+  );
+  const [workouts, setWorkouts] = useState<WorkoutLog[]>(() =>
+    Array.isArray(initialCache.workouts) ? initialCache.workouts : []
+  );
+  const [photos, setPhotos] = useState<PhysiquePhoto[]>(() =>
+    Array.isArray(initialCache.photos) ? initialCache.photos : []
+  );
   const [badges] = useState<Badge[]>([]);
-  const [notifications, setNotifications] = useState<SmartNotification[]>([]);
-  const [tuitionPackages, setTuitionPackages] = useState<TuitionPackage[]>([]);
-  const [herbalifeProducts, setHerbalifeProducts] = useState<HerbalifeProduct[]>([]);
+  const [notifications, setNotifications] = useState<SmartNotification[]>(() =>
+    Array.isArray(initialCache.notifications) ? initialCache.notifications : []
+  );
+  const [tuitionPackages, setTuitionPackages] = useState<TuitionPackage[]>(() =>
+    Array.isArray(initialCache.tuitionPackages) ? initialCache.tuitionPackages : []
+  );
+  const [herbalifeProducts, setHerbalifeProducts] = useState<HerbalifeProduct[]>(() =>
+    Array.isArray(initialCache.herbalifeProducts) ? initialCache.herbalifeProducts : []
+  );
 
   const [dbStatus, setDbStatus] = useState<{
     connected: boolean;
@@ -340,6 +400,10 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (primaryData) {
         setTuitionPackages(primaryData.packages);
         setHerbalifeProducts(primaryData.products);
+        writeSwrCache({
+          tuitionPackages: primaryData.packages,
+          herbalifeProducts: primaryData.products,
+        });
         return primaryData;
       }
       return null;
@@ -348,11 +412,11 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, [currentUser?.username]);
 
-  // Load all data directly from PostgreSQL database API (Never from local storage)
+  // Stale-While-Revalidate: render cached state immediately on mount, then sync via single /api/bootstrap call
   const refreshDatabase = useCallback(async () => {
     try {
-      const healthCheck = await fetch(apiUrl('/api/health')).catch(() => null);
-      if (!healthCheck) {
+      const res = await fetch(apiUrl('/api/bootstrap')).catch(() => null);
+      if (!res) {
         setDbStatus({
           connected: false,
           name: 'defaultdb (Aiven PostgreSQL)',
@@ -363,13 +427,13 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         return;
       }
 
-      const healthData = await healthCheck.json().catch(() => null);
-      if (!healthCheck.ok || !healthData?.databaseConnected) {
-        const errMsg = healthData?.error || DEFAULT_DB_DISCONNECTED_MSG;
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.databaseConnected) {
+        const errMsg = data?.error || DEFAULT_DB_DISCONNECTED_MSG;
         setDbStatus({
           connected: false,
-          name: `${healthData?.databaseName || 'defaultdb'} (Aiven PostgreSQL)`,
-          host: healthData?.host || 'aivencloud.com',
+          name: `${data?.databaseName || 'defaultdb'} (Aiven PostgreSQL)`,
+          host: data?.host || 'aivencloud.com',
           error: errMsg,
         });
         setDbError(errMsg);
@@ -378,52 +442,51 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       setDbStatus({
         connected: true,
-        name: `${healthData.databaseName || 'defaultdb'} (Aiven PostgreSQL)`,
-        host: healthData.host || 'aivencloud.com',
+        name: `${data.databaseName || 'defaultdb'} (Aiven PostgreSQL)`,
+        host: data.host || 'aivencloud.com',
       });
       setDbError(null);
 
-      const [resU, resS, resM, resA, resMeals, resW, resP, resN] = await Promise.allSettled([
-        fetch(apiUrl('/api/users')).then((r) => (r.ok ? r.json() : Promise.reject(r))),
-        fetch(apiUrl('/api/students')).then((r) => (r.ok ? r.json() : Promise.reject(r))),
-        fetch(apiUrl('/api/metrics')).then((r) => (r.ok ? r.json() : Promise.reject(r))),
-        fetch(apiUrl('/api/advices')).then((r) => (r.ok ? r.json() : Promise.reject(r))),
-        fetch(apiUrl('/api/meals')).then((r) => (r.ok ? r.json() : Promise.reject(r))),
-        fetch(apiUrl('/api/workouts')).then((r) => (r.ok ? r.json() : Promise.reject(r))),
-        fetch(apiUrl('/api/photos')).then((r) => (r.ok ? r.json() : Promise.reject(r))),
-        fetch(apiUrl('/api/notifications')).then((r) => (r.ok ? r.json() : Promise.reject(r))),
-      ]);
-
-      if (resU.status === 'fulfilled' && Array.isArray(resU.value)) {
-        setUsers(resU.value);
+      const nextCache: SwrCachePayload = {};
+      if (Array.isArray(data.users)) {
+        setUsers(data.users);
+        nextCache.users = data.users;
       }
-      if (resS.status === 'fulfilled' && Array.isArray(resS.value)) {
-        setAllStudents(resS.value);
+      if (Array.isArray(data.students)) {
+        setAllStudents(data.students);
+        nextCache.students = data.students;
         setSelectedStudent((prev) => {
-          if (prev && resS.value.some((s: StudentProfile) => s.id === prev.id)) {
+          if (prev && data.students.some((s: StudentProfile) => s.id === prev.id)) {
             return prev;
           }
-          return resS.value[0] || null;
+          return data.students[0] || null;
         });
       }
-      if (resM.status === 'fulfilled' && Array.isArray(resM.value)) {
-        setMetrics(resM.value);
+      if (Array.isArray(data.metrics)) {
+        setMetrics(data.metrics);
+        nextCache.metrics = data.metrics;
       }
-      if (resA.status === 'fulfilled' && Array.isArray(resA.value)) {
-        setAdvices(resA.value);
+      if (Array.isArray(data.advices)) {
+        setAdvices(data.advices);
+        nextCache.advices = data.advices;
       }
-      if (resMeals.status === 'fulfilled' && Array.isArray(resMeals.value)) {
-        setMeals(resMeals.value);
+      if (Array.isArray(data.meals)) {
+        setMeals(data.meals);
+        nextCache.meals = data.meals;
       }
-      if (resW.status === 'fulfilled' && Array.isArray(resW.value)) {
-        setWorkouts(resW.value);
+      if (Array.isArray(data.workouts)) {
+        setWorkouts(data.workouts);
+        nextCache.workouts = data.workouts;
       }
-      if (resP.status === 'fulfilled' && Array.isArray(resP.value)) {
-        setPhotos(resP.value);
+      if (Array.isArray(data.photos)) {
+        setPhotos(data.photos);
+        nextCache.photos = data.photos;
       }
-      if (resN.status === 'fulfilled' && Array.isArray(resN.value)) {
-        setNotifications(resN.value);
+      if (Array.isArray(data.notifications)) {
+        setNotifications(data.notifications);
+        nextCache.notifications = data.notifications;
       }
+      writeSwrCache(nextCache);
     } catch {
       setDbStatus((prev) => ({
         ...prev,

@@ -770,6 +770,174 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// Row mappers shared between individual GET endpoints and /api/bootstrap
+function mapUserRow(r: any) {
+  return {
+    id: r.id,
+    username: r.username,
+    password: r.password,
+    fullName: r.full_name,
+    role: r.role as 'admin' | 'trainer' | 'student',
+    phone: r.phone || '',
+    studentId: r.student_id || null,
+    trainerId: r.trainer_id || null,
+    discountTier: Number.isFinite(Number(r.discount_tier)) ? Number(r.discount_tier) : 50,
+    createdAt: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '',
+  };
+}
+
+function mapStudentRow(r: any) {
+  return {
+    id: r.id,
+    fullName: r.full_name,
+    gender: r.gender,
+    age: r.age,
+    height: parseFloat(r.height),
+    phone: r.phone,
+    address: r.address || '',
+    dateOfBirth: r.date_of_birth ? new Date(r.date_of_birth).toISOString().split('T')[0] : '',
+    healthGoal: r.health_goal,
+    targetMetrics: r.target_metrics || {},
+    avatarUrl: r.avatar_url || '',
+    trainerId: r.trainer_id || '',
+    trainerName: r.trainer_name || '',
+    createdAt: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '',
+  };
+}
+
+function mapMetricRow(r: any) {
+  return {
+    id: r.id,
+    studentId: r.student_id,
+    date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
+    timestamp: Number(r.timestamp),
+    weight: parseFloat(r.weight),
+    subcutaneousFat: parseFloat(r.subcutaneous_fat),
+    boneCalcium: parseFloat(r.bone_calcium),
+    bodyWater: parseFloat(r.body_water),
+    muscleMass: parseFloat(r.muscle_mass),
+    bodyType: r.body_type,
+    bmr: parseInt(r.bmr, 10),
+    biologicalAge: parseInt(r.biological_age, 10),
+    visceralFat: parseInt(r.visceral_fat, 10),
+    waist: parseFloat(r.waist),
+    notes: r.notes || '',
+  };
+}
+
+function mapAdviceRow(r: any) {
+  return {
+    id: r.id,
+    studentId: r.student_id,
+    metricRecordId: r.metric_record_id,
+    date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
+    status: r.status,
+    aiDraftContent: r.ai_draft_content,
+    trainerEditedContent: r.trainer_edited_content,
+    trainerNote: r.trainer_note,
+    approvedAt: r.approved_at,
+  };
+}
+
+function mapMealRow(r: any) {
+  return {
+    id: r.id,
+    studentId: r.student_id,
+    date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
+    mealType: r.meal_type,
+    imageUrl: r.image_url || '',
+    foodDescription: r.food_description || '',
+    estimatedCalories: r.estimated_calories || 0,
+    macros: r.macros || { protein: 0, carbs: 0, fat: 0 },
+    trainerReaction: r.trainer_reaction,
+    trainerComment: r.trainer_comment,
+    loggedAt: r.logged_at,
+  };
+}
+
+function mapWorkoutRow(r: any) {
+  return {
+    id: r.id,
+    studentId: r.student_id,
+    date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
+    planTitle: r.plan_title,
+    durationMinutes: r.duration_minutes,
+    exercises: r.exercises || [],
+    trainerReaction: r.trainer_reaction,
+    trainerComment: r.trainer_comment,
+    loggedAt: r.logged_at,
+  };
+}
+
+function mapPhotoRow(r: any) {
+  return {
+    id: r.id,
+    studentId: r.student_id,
+    date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
+    imageUrl: r.image_url,
+    photoType: r.photo_type,
+    weight: parseFloat(r.weight),
+    notes: r.notes || '',
+  };
+}
+
+function mapNotificationRow(r: any) {
+  return {
+    id: r.id,
+    useCaseId: r.use_case_id,
+    studentId: r.student_id,
+    title: r.title,
+    message: r.message,
+    priority: r.priority,
+    createdAt: r.created_at,
+    read: r.read,
+  };
+}
+
+// Single-request bootstrap API: runs all core queries in parallel to avoid cold-start fan-out
+app.get('/api/bootstrap', async (req, res) => {
+  try {
+    await ensureDbReady();
+    const [
+      usersRes,
+      studentsRes,
+      metricsRes,
+      advicesRes,
+      mealsRes,
+      workoutsRes,
+      photosRes,
+      notificationsRes,
+    ] = await Promise.all([
+      pool.query(
+        'SELECT id, username, password, full_name, role, phone, student_id, trainer_id, discount_tier, created_at FROM users ORDER BY created_at DESC'
+      ),
+      pool.query('SELECT * FROM students ORDER BY created_at DESC'),
+      pool.query('SELECT * FROM health_metrics ORDER BY timestamp ASC'),
+      pool.query('SELECT * FROM ai_advices ORDER BY date DESC'),
+      pool.query('SELECT * FROM meal_logs ORDER BY date DESC, logged_at DESC'),
+      pool.query('SELECT * FROM workout_logs ORDER BY date DESC'),
+      pool.query('SELECT * FROM physique_photos ORDER BY date ASC'),
+      pool.query('SELECT * FROM smart_notifications ORDER BY created_at DESC'),
+    ]);
+
+    return res.json({
+      databaseConnected: true,
+      databaseName: dbInfo.databaseName,
+      host: dbInfo.host,
+      users: usersRes.rows.map(mapUserRow),
+      students: studentsRes.rows.map(mapStudentRow),
+      metrics: metricsRes.rows.map(mapMetricRow),
+      advices: advicesRes.rows.map(mapAdviceRow),
+      meals: mealsRes.rows.map(mapMealRow),
+      workouts: workoutsRes.rows.map(mapWorkoutRow),
+      photos: photosRes.rows.map(mapPhotoRow),
+      notifications: notificationsRes.rows.map(mapNotificationRow),
+    });
+  } catch (err: unknown) {
+    return handleDbRouteError(res, err);
+  }
+});
+
 // Users & Trainers Management API (Strictly Stored in PostgreSQL Database)
 app.get('/api/users', async (req, res) => {
   try {
@@ -777,19 +945,7 @@ app.get('/api/users', async (req, res) => {
     const result = await pool.query(
       'SELECT id, username, password, full_name, role, phone, student_id, trainer_id, discount_tier, created_at FROM users ORDER BY created_at DESC'
     );
-    const users = result.rows.map((r) => ({
-      id: r.id,
-      username: r.username,
-      password: r.password,
-      fullName: r.full_name,
-      role: r.role as 'admin' | 'trainer' | 'student',
-      phone: r.phone || '',
-      studentId: r.student_id || null,
-      trainerId: r.trainer_id || null,
-      discountTier: Number.isFinite(Number(r.discount_tier)) ? Number(r.discount_tier) : 50,
-      createdAt: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '',
-    }));
-    return res.json(users);
+    return res.json(result.rows.map(mapUserRow));
   } catch (err: unknown) {
     return handleDbRouteError(res, err);
   }
@@ -963,23 +1119,7 @@ app.get('/api/students', async (req, res) => {
   try {
     await ensureDbReady();
     const result = await pool.query('SELECT * FROM students ORDER BY created_at DESC');
-    const students = result.rows.map((r) => ({
-      id: r.id,
-      fullName: r.full_name,
-      gender: r.gender,
-      age: r.age,
-      height: parseFloat(r.height),
-      phone: r.phone,
-      address: r.address || '',
-      dateOfBirth: r.date_of_birth ? new Date(r.date_of_birth).toISOString().split('T')[0] : '',
-      healthGoal: r.health_goal,
-      targetMetrics: r.target_metrics || {},
-      avatarUrl: r.avatar_url || '',
-      trainerId: r.trainer_id || '',
-      trainerName: r.trainer_name || '',
-      createdAt: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '',
-    }));
-    return res.json(students);
+    return res.json(result.rows.map(mapStudentRow));
   } catch (err: unknown) {
     return handleDbRouteError(res, err);
   }
@@ -1281,24 +1421,7 @@ app.get('/api/metrics', async (req, res) => {
       : 'SELECT * FROM health_metrics ORDER BY timestamp ASC';
     const params = studentId ? [studentId] : [];
     const result = await pool.query(query, params);
-    const metrics = result.rows.map((r) => ({
-      id: r.id,
-      studentId: r.student_id,
-      date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
-      timestamp: Number(r.timestamp),
-      weight: parseFloat(r.weight),
-      subcutaneousFat: parseFloat(r.subcutaneous_fat),
-      boneCalcium: parseFloat(r.bone_calcium),
-      bodyWater: parseFloat(r.body_water),
-      muscleMass: parseFloat(r.muscle_mass),
-      bodyType: r.body_type,
-      bmr: parseInt(r.bmr, 10),
-      biologicalAge: parseInt(r.biological_age, 10),
-      visceralFat: parseInt(r.visceral_fat, 10),
-      waist: parseFloat(r.waist),
-      notes: r.notes || '',
-    }));
-    return res.json(metrics);
+    return res.json(result.rows.map(mapMetricRow));
   } catch (err: unknown) {
     return handleDbRouteError(res, err);
   }
@@ -1378,18 +1501,7 @@ app.get('/api/advices', async (req, res) => {
       : 'SELECT * FROM ai_advices ORDER BY date DESC';
     const params = studentId ? [studentId] : [];
     const result = await pool.query(query, params);
-    const advices = result.rows.map((r) => ({
-      id: r.id,
-      studentId: r.student_id,
-      metricRecordId: r.metric_record_id,
-      date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
-      status: r.status,
-      aiDraftContent: r.ai_draft_content,
-      trainerEditedContent: r.trainer_edited_content,
-      trainerNote: r.trainer_note,
-      approvedAt: r.approved_at,
-    }));
-    return res.json(advices);
+    return res.json(result.rows.map(mapAdviceRow));
   } catch (err: unknown) {
     return handleDbRouteError(res, err);
   }
@@ -1605,20 +1717,7 @@ app.get('/api/meals', async (req, res) => {
       : 'SELECT * FROM meal_logs ORDER BY date DESC, logged_at DESC';
     const params = studentId ? [studentId] : [];
     const result = await pool.query(query, params);
-    const meals = result.rows.map((r) => ({
-      id: r.id,
-      studentId: r.student_id,
-      date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
-      mealType: r.meal_type,
-      imageUrl: r.image_url || '',
-      foodDescription: r.food_description || '',
-      estimatedCalories: r.estimated_calories || 0,
-      macros: r.macros || { protein: 0, carbs: 0, fat: 0 },
-      trainerReaction: r.trainer_reaction,
-      trainerComment: r.trainer_comment,
-      loggedAt: r.logged_at,
-    }));
-    return res.json(meals);
+    return res.json(result.rows.map(mapMealRow));
   } catch (err: unknown) {
     return handleDbRouteError(res, err);
   }
@@ -1744,18 +1843,7 @@ app.get('/api/workouts', async (req, res) => {
       : 'SELECT * FROM workout_logs ORDER BY date DESC';
     const params = studentId ? [studentId] : [];
     const result = await pool.query(query, params);
-    const workouts = result.rows.map((r) => ({
-      id: r.id,
-      studentId: r.student_id,
-      date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
-      planTitle: r.plan_title,
-      durationMinutes: r.duration_minutes,
-      exercises: r.exercises || [],
-      trainerReaction: r.trainer_reaction,
-      trainerComment: r.trainer_comment,
-      loggedAt: r.logged_at,
-    }));
-    return res.json(workouts);
+    return res.json(result.rows.map(mapWorkoutRow));
   } catch (err: unknown) {
     return handleDbRouteError(res, err);
   }
@@ -1811,16 +1899,7 @@ app.get('/api/photos', async (req, res) => {
       : 'SELECT * FROM physique_photos ORDER BY date ASC';
     const params = studentId ? [studentId] : [];
     const result = await pool.query(query, params);
-    const photos = result.rows.map((r) => ({
-      id: r.id,
-      studentId: r.student_id,
-      date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
-      imageUrl: r.image_url,
-      photoType: r.photo_type,
-      weight: parseFloat(r.weight),
-      notes: r.notes || '',
-    }));
-    return res.json(photos);
+    return res.json(result.rows.map(mapPhotoRow));
   } catch (err: unknown) {
     return handleDbRouteError(res, err);
   }
@@ -1846,17 +1925,7 @@ app.get('/api/notifications', async (req, res) => {
   try {
     await ensureDbReady();
     const result = await pool.query('SELECT * FROM smart_notifications ORDER BY created_at DESC');
-    const notifications = result.rows.map((r) => ({
-      id: r.id,
-      useCaseId: r.use_case_id,
-      studentId: r.student_id,
-      title: r.title,
-      message: r.message,
-      priority: r.priority,
-      createdAt: r.created_at,
-      read: r.read,
-    }));
-    return res.json(notifications);
+    return res.json(result.rows.map(mapNotificationRow));
   } catch (err: unknown) {
     return handleDbRouteError(res, err);
   }
