@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {
+import type {
   StudentProfile,
   HealthMetricRecord,
   HealthScoreBreakdown,
@@ -13,14 +13,14 @@ import {
   ActionRecommendationItem,
   AIHealthAnalysisContent,
   CalorieGoalBreakdown,
-} from '../types/health';
+} from '../types/health.js';
 import {
   getIdealWeightRange,
   getVisceralFatEvaluation,
   getBoneMassEvaluation,
   BODY_TYPE_DEFINITIONS,
   WATER_STANDARDS,
-} from '../data/medicalStandards';
+} from '../data/medicalStandards.js';
 
 /**
  * 1. Calculate Daily Recommended Water (Từ bảng tiêu chuẩn trong ảnh 59bf1002.jpg)

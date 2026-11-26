@@ -10,7 +10,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
-import { calculateCalorieGoalBreakdown } from './src/utils/healthCalculations.ts';
+import { calculateCalorieGoalBreakdown } from './src/utils/healthCalculations.js';
 
 dotenv.config();
 
@@ -2789,7 +2789,8 @@ async function startServer() {
     }
   } else {
     try {
-      const { createServer: createViteServer } = await import('vite');
+      const vitePkg = 'vite';
+      const { createServer: createViteServer } = await import(/* @vite-ignore */ vitePkg);
       const vite = await createViteServer({
         server: { middlewareMode: true },
         appType: 'spa',
