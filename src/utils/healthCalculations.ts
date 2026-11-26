@@ -13,6 +13,7 @@ import type {
   ActionRecommendationItem,
   AIHealthAnalysisContent,
   CalorieGoalBreakdown,
+  DeepAssessmentCard,
 } from '../types/health.js';
 import {
   getIdealWeightRange,
@@ -546,29 +547,107 @@ export function generateInstantAIAdvice(
     (b) => b.code.toLowerCase() === latest.bodyType.toLowerCase() || b.name.includes(latest.bodyType)
   );
 
-  const overview = `Học viên ${profile.fullName} (${profile.gender}, ${profile.age} tuổi) hiện được phân loại thể hình "${latest.bodyType}" (Cấp ${bodyTypeDef?.index || 5}/9). Thể trạng: ${bodyTypeDef?.description || 'Các chỉ số cân đối tương đối.'}`;
-
+  const isLowWater = latest.bodyWater < (profile.gender === 'Nam' ? 55 : 50);
+  const isHighSubFat = latest.subcutaneousFat > (profile.gender === 'Nam' ? 20 : 28);
+  const isLowMuscle = latest.muscleMass < (profile.gender === 'Nam' ? 32 : 21);
   const muscleRatio = ((latest.muscleMass / latest.weight) * 100).toFixed(1);
-  const bodyCompositionAnalysis = `Khối lượng cơ bắp đạt ${latest.muscleMass}kg (${muscleRatio}% thể trọng), mỡ dưới da ${latest.subcutaneousFat}%, canxi xương đạt ${latest.boneCalcium} (chuẩn: ${boneStandard.targetBoneKg}kg). Lượng nước cơ thể ghi nhận ${latest.bodyWater}%. ${latest.muscleMass < (profile.gender === 'Nam' ? 32 : 21) ? 'Khối cơ bắp đang ở mức thấp so với khung xương, cần kích hoạt tăng cơ.' : 'Khối cơ bắp phát triển tốt.'}`;
 
-  const visceralAndAgingRisk = `Mỡ nội tạng đo được cấp ${latest.visceralFat} (${visceralEval.label}): ${visceralEval.assessment}. Tuổi sinh học ${latest.biologicalAge} tuổi so với tuổi thực ${profile.age} tuổi (${ageDelta > 0 ? `chênh +${ageDelta} tuổi, tốc độ chuyển hóa đang bị suy giảm` : 'chuyển hóa nội sinh đang trẻ hóa tốt'}). ${visceralEval.associatedRisks.length > 0 ? `Nguy cơ bệnh lý cần kiểm soát: ${visceralEval.associatedRisks.join('; ')}.` : 'Không ghi nhận nguy cơ bệnh lý chuyển hóa cấp tính.'}`;
+  const overviewCard: DeepAssessmentCard = {
+    badge_text: bodyTypeDef && bodyTypeDef.index >= 4 && bodyTypeDef.index <= 6 ? 'Cân đối' : 'Cần tối ưu',
+    badge_tone: bodyTypeDef && bodyTypeDef.index >= 4 && bodyTypeDef.index <= 6 ? 'positive' : 'warning',
+    analysis: `Học viên **${profile.fullName}** (${profile.gender}, ${profile.age} tuổi) đang ở nhóm thể hình **"${latest.bodyType}"** (Cấp **${bodyTypeDef?.index || 5}/9**). ${bodyTypeDef?.description || 'Các chỉ số nền tảng ở mức tương đối cân đối.'}`,
+    action_tip: 'Duy trì nhịp đo định kỳ mỗi 7–14 ngày để theo dõi sự dịch chuyển cấp độ thể hình.',
+  };
 
-  let progressComparison = 'Khởi điểm ghi nhận lần đo đầu tiên trong hệ thống.';
+  const matrixIssues: string[] = [];
+  if (isLowMuscle) matrixIssues.push('khối cơ còn thấp');
+  if (isLowWater) matrixIssues.push('tỷ lệ nước đang thiếu nhẹ');
+  if (isHighSubFat) matrixIssues.push('mỡ dưới da hơi cao');
+
+  const bodyMatrixCard: DeepAssessmentCard = {
+    badge_text: matrixIssues.length === 0 ? 'Đạt chuẩn' : isLowWater ? 'Thiếu nước nhẹ' : 'Cần cân bằng',
+    badge_tone: matrixIssues.length === 0 ? 'positive' : 'warning',
+    analysis: `Cơ bắp đạt **${latest.muscleMass}kg** (**${muscleRatio}%** thể trọng), mỡ dưới da **${latest.subcutaneousFat}%**, khối lượng xương **${latest.boneCalcium}kg** (chuẩn: **${boneStandard.targetBoneKg}kg**) và lượng nước **${latest.bodyWater}%**. ${
+      matrixIssues.length > 0
+        ? `Hiện ghi nhận **${matrixIssues.join(', ')}** so với ngưỡng tham chiếu theo giới tính ${profile.gender}, cần ưu tiên bù nước và giữ đạm đều đặn.`
+        : 'Tỷ lệ cơ, nước và khối lượng xương đang phối hợp hài hòa theo ngưỡng tham chiếu.'
+    }`,
+    action_tip: isLowWater
+      ? `Uống đủ **${waterTarget} Lít/ngày** chia đều theo giờ để tối ưu trao đổi chất.`
+      : `Giữ mức đạm **${calorieAnalysis.recommendedMacros.proteinGrams}g/ngày** để nuôi dưỡng và bảo toàn khối cơ.`,
+  };
+
+  const agingCauseNote =
+    ageDelta > 0
+      ? `Dù ${isLowMuscle ? 'cơ bắp cần tăng thêm' : 'khối cơ đang khá tốt'}, tuổi sinh học (**${latest.biologicalAge} tuổi**) vẫn cao hơn tuổi thực (**${profile.age} tuổi**) khoảng **+${ageDelta} tuổi**, nhiều khả năng liên quan đến ${isLowWater ? 'tình trạng thiếu nước làm chậm trao đổi chất' : isHighSubFat ? 'tỷ lệ mỡ dưới da cao gây áp lực chuyển hóa' : 'tốc độ chuyển hóa nền chưa tối ưu'}.`
+      : `Tuổi sinh học **${latest.biologicalAge} tuổi** đang trẻ hơn hoặc bằng tuổi thực (**${profile.age} tuổi**), cho thấy hiệu suất chuyển hóa nội sinh tích cực.`;
+
+  const visceralAndAgingCard: DeepAssessmentCard = {
+    badge_text:
+      latest.visceralFat >= 10
+        ? 'Cảnh báo cao'
+        : ageDelta > 0 || latest.visceralFat >= 7
+        ? 'Cần tối ưu chuyển hóa'
+        : 'Nguy cơ thấp',
+    badge_tone: latest.visceralFat >= 10 ? 'alert' : ageDelta > 0 || latest.visceralFat >= 7 ? 'warning' : 'positive',
+    analysis: `Mỡ nội tạng ở **Cấp ${latest.visceralFat}** (${visceralEval.label}). ${agingCauseNote} ${
+      visceralEval.associatedRisks.length > 0
+        ? `Cần chủ động kiểm soát các yếu tố nguy cơ: ${visceralEval.associatedRisks.join('; ')}.`
+        : 'Nguy cơ rối loạn chuyển hóa liên quan đến mỡ nội tạng hiện ở mức thấp.'
+    }`,
+    action_tip:
+      latest.visceralFat >= 8
+        ? 'Ưu tiên cắt đường tinh luyện và tăng vận động Cardio Zone 2 từ 25–30 phút/buổi.'
+        : 'Duy trì giấc ngủ trước 23h00 và vận động đều để giữ tuổi sinh học ổn định.',
+  };
+
+  let progressComparisonCard: DeepAssessmentCard = {
+    badge_text: 'Mốc chuẩn (Baseline)',
+    badge_tone: 'neutral',
+    analysis: 'Đây là **lần đo đầu tiên**, đóng vai trò mốc chuẩn (baseline) để đối chiếu tốc độ thay đổi cơ, mỡ và nước ở các kỳ kiểm tra tiếp theo.',
+    action_tip: 'Giữ cùng khung giờ và trạng thái cơ thể khi cân đo ở lần tới để so sánh chính xác.',
+  };
+
   if (previous) {
     const dWeight = Number((latest.weight - previous.weight).toFixed(1));
     const dMuscle = Number((latest.muscleMass - previous.muscleMass).toFixed(1));
     const dFat = Number((latest.subcutaneousFat - previous.subcutaneousFat).toFixed(1));
     const dVisceral = latest.visceralFat - previous.visceralFat;
     const parts: string[] = [];
-    if (dWeight !== 0) parts.push(`Cân nặng ${dWeight > 0 ? `tăng +${dWeight}` : `giảm ${dWeight}`}kg`);
-    if (dMuscle !== 0) parts.push(`Cơ bắp ${dMuscle > 0 ? `tăng +${dMuscle}` : `giảm ${dMuscle}`}kg`);
-    if (dFat !== 0) parts.push(`Mỡ dưới da ${dFat > 0 ? `tăng +${dFat}` : `giảm ${dFat}`}%`);
-    if (dVisceral !== 0) parts.push(`Mỡ nội tạng ${dVisceral > 0 ? `tăng +${dVisceral}` : `hạ ${dVisceral}`} cấp`);
+    if (dWeight !== 0) parts.push(`cân nặng **${dWeight > 0 ? `+${dWeight}` : dWeight}kg**`);
+    if (dMuscle !== 0) parts.push(`cơ bắp **${dMuscle > 0 ? `+${dMuscle}` : dMuscle}kg**`);
+    if (dFat !== 0) parts.push(`mỡ dưới da **${dFat > 0 ? `+${dFat}` : dFat}%**`);
+    if (dVisceral !== 0) parts.push(`mỡ nội tạng **${dVisceral > 0 ? `+${dVisceral}` : dVisceral} cấp**`);
 
-    progressComparison = parts.length > 0
-      ? `So với lần đo trước (${previous.date}): ${parts.join(', ')}.`
-      : 'Thể trạng ổn định so với lần đo liền kề.';
+    const isRecompGood = dMuscle >= 0 && dFat < 0;
+    progressComparisonCard = {
+      badge_text: isRecompGood ? 'Tăng cơ - Giảm mỡ' : dMuscle < 0 ? 'Cần giữ cơ' : 'Ổn định',
+      badge_tone: isRecompGood ? 'positive' : dMuscle < 0 ? 'warning' : 'neutral',
+      analysis:
+        parts.length > 0
+          ? `So với lần đo trước (${previous.date}): ${parts.join(', ')}. ${
+              isRecompGood
+                ? 'Xu hướng **tăng cơ - giảm mỡ** đang đi đúng hướng và rất tích cực.'
+                : dMuscle < 0
+                ? 'Khối cơ có dấu hiệu giảm nhẹ, cần rà soát lại lượng đạm và cường độ tập kháng lực.'
+                : 'Các chỉ số đang dịch chuyển ổn định theo lộ trình.'
+            }`
+          : `Các chỉ số giữ mức ổn định so với lần đo liền kề (${previous.date}).`,
+      action_tip: isRecompGood
+        ? 'Tiếp tục bám sát mức Calo và lịch tập hiện tại để duy trì đà tiến bộ.'
+        : 'Kiểm tra lại nhật ký bữa ăn để đảm bảo đủ đạm và nước mỗi ngày.',
+    };
   }
+
+  const keyActions = [
+    bodyMatrixCard.action_tip,
+    visceralAndAgingCard.action_tip,
+    progressComparisonCard.action_tip,
+  ].filter((t): t is string => Boolean(t));
+
+  const overview = overviewCard.analysis;
+  const visceralAndAgingRisk = visceralAndAgingCard.analysis;
+  const progressComparison = progressComparisonCard.analysis;
 
   // ==========================================
   // PHẦN 3: KHUYẾN NGHỊ HÀNH ĐỘNG CỤ THỂ (actionRecommendations)
@@ -625,10 +704,11 @@ export function generateInstantAIAdvice(
   return {
     warningMetrics,
     deepAssessment: {
-      overview,
-      bodyCompositionAnalysis,
-      visceralAndAgingRisk,
-      progressComparison,
+      overview: overviewCard,
+      body_matrix: bodyMatrixCard,
+      visceral_and_aging: visceralAndAgingCard,
+      progress_comparison: progressComparisonCard,
+      key_actions: keyActions,
     },
     actionRecommendations,
     calorieAnalysis,
@@ -639,6 +719,48 @@ export function generateInstantAIAdvice(
     waterTargetLiters: waterTarget,
     calorieTargetKcal: calorieTarget,
   };
+}
+
+/**
+ * Resolve deep assessment card safely for both new structured format and legacy string format
+ */
+export function resolveDeepAssessmentCard(
+  primary: string | DeepAssessmentCard | undefined,
+  legacyText: string | undefined,
+  defaultBadge: string
+): DeepAssessmentCard {
+  if (primary && typeof primary === 'object' && typeof primary.analysis === 'string') {
+    return {
+      badge_text: primary.badge_text || defaultBadge,
+      badge_tone: primary.badge_tone || 'neutral',
+      analysis: primary.analysis,
+      action_tip: primary.action_tip,
+    };
+  }
+  const text =
+    typeof primary === 'string' && primary.trim()
+      ? primary
+      : typeof legacyText === 'string'
+      ? legacyText
+      : '';
+  return {
+    badge_text: defaultBadge,
+    badge_tone: 'neutral',
+    analysis: text,
+  };
+}
+
+export function getDeepAssessmentText(
+  primary: string | DeepAssessmentCard | undefined,
+  legacyText?: string
+): string {
+  if (primary && typeof primary === 'object' && typeof primary.analysis === 'string') {
+    return primary.analysis.replace(/\*\*/g, '');
+  }
+  if (typeof primary === 'string' && primary.trim()) {
+    return primary.replace(/\*\*/g, '');
+  }
+  return (legacyText || '').replace(/\*\*/g, '');
 }
 
 /**

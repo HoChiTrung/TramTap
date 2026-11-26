@@ -5,7 +5,7 @@
 
 import React, { useState } from 'react';
 import { useHealth } from '../../context/HealthContext';
-import { calculateHealthScore } from '../../utils/healthCalculations';
+import { calculateHealthScore, getDeepAssessmentText } from '../../utils/healthCalculations';
 import {
   X,
   Printer,
@@ -309,10 +309,18 @@ export const PrintableReportModal: React.FC = () => {
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10.5px] text-slate-700">
                       <div className="p-2 bg-white rounded-lg border border-slate-200">
-                        <strong>Thể trạng & Cơ mỡ:</strong> {approvedAdvice.aiDraftContent.deepAssessment.bodyCompositionAnalysis}
+                        <strong>Thể trạng & Cơ mỡ:</strong>{' '}
+                        {getDeepAssessmentText(
+                          approvedAdvice.aiDraftContent.deepAssessment.body_matrix,
+                          approvedAdvice.aiDraftContent.deepAssessment.bodyCompositionAnalysis
+                        )}
                       </div>
                       <div className="p-2 bg-white rounded-lg border border-slate-200">
-                        <strong>Mỡ nội tạng & Lão hóa:</strong> {approvedAdvice.aiDraftContent.deepAssessment.visceralAndAgingRisk}
+                        <strong>Mỡ nội tạng & Lão hóa:</strong>{' '}
+                        {getDeepAssessmentText(
+                          approvedAdvice.aiDraftContent.deepAssessment.visceral_and_aging,
+                          approvedAdvice.aiDraftContent.deepAssessment.visceralAndAgingRisk
+                        )}
                       </div>
                     </div>
                   </div>

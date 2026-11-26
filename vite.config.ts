@@ -51,9 +51,10 @@ function resolveAppVersion(): string {
   return `V${major}.${minor + commitDelta}`;
 }
 
-export default defineConfig(() => {
+export default defineConfig(({ mode }) => {
   const appVersion = resolveAppVersion();
   const buildTime = new Date().toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+  const isProd = mode === 'production';
 
   return {
     base: './',
@@ -104,7 +105,7 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          globPatterns: isProd ? ['**/*.{js,css,html,ico,png,svg,woff,woff2}'] : [],
           navigateFallbackDenylist: [/^\/api\//],
           runtimeCaching: [
             {

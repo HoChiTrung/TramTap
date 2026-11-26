@@ -6,7 +6,7 @@
 import React from 'react';
 import { AIAdviceRecord, StudentProfile } from '../../types/health';
 import { useHealth } from '../../context/HealthContext';
-import { calculateCalorieGoalBreakdown } from '../../utils/healthCalculations';
+import { calculateCalorieGoalBreakdown, getDeepAssessmentText } from '../../utils/healthCalculations';
 import {
   Sparkles,
   Droplet,
@@ -259,7 +259,7 @@ export const AIAdviceQueue: React.FC<AIAdviceQueueProps> = ({ student, advices }
                           <span>Tổng Quan Thể Trạng (9 Cấp Độ Thể Hình):</span>
                         </div>
                         <p className="text-slate-700 leading-relaxed font-medium">
-                          {content.deepAssessment.overview}
+                          {getDeepAssessmentText(content.deepAssessment.overview)}
                         </p>
                       </div>
 
@@ -270,7 +270,10 @@ export const AIAdviceQueue: React.FC<AIAdviceQueueProps> = ({ student, advices }
                           <span>Ma Trận Cơ - Mỡ - Nước - Xương:</span>
                         </div>
                         <p className="text-slate-700 leading-relaxed font-medium">
-                          {content.deepAssessment.bodyCompositionAnalysis}
+                          {getDeepAssessmentText(
+                            content.deepAssessment.body_matrix,
+                            content.deepAssessment.bodyCompositionAnalysis
+                          )}
                         </p>
                       </div>
 
@@ -281,7 +284,10 @@ export const AIAdviceQueue: React.FC<AIAdviceQueueProps> = ({ student, advices }
                           <span>Mỡ Nội Tạng & Lão Hóa Sinh Học:</span>
                         </div>
                         <p className="text-slate-700 leading-relaxed font-medium">
-                          {content.deepAssessment.visceralAndAgingRisk}
+                          {getDeepAssessmentText(
+                            content.deepAssessment.visceral_and_aging,
+                            content.deepAssessment.visceralAndAgingRisk
+                          )}
                         </p>
                       </div>
 
@@ -292,7 +298,10 @@ export const AIAdviceQueue: React.FC<AIAdviceQueueProps> = ({ student, advices }
                           <span>So Sánh Biến Động Giữa Các Lần Đo:</span>
                         </div>
                         <p className="text-slate-700 leading-relaxed font-medium">
-                          {content.deepAssessment.progressComparison || 'Lần đo đầu tiên - thiết lập mốc khởi điểm (baseline).'}
+                          {getDeepAssessmentText(
+                            content.deepAssessment.progress_comparison,
+                            content.deepAssessment.progressComparison
+                          ) || 'Lần đo đầu tiên - thiết lập mốc khởi điểm (baseline).'}
                         </p>
                       </div>
                     </div>

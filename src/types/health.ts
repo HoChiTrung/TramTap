@@ -137,16 +137,32 @@ export interface ActionRecommendationItem {
   notes?: string;
 }
 
+export type DeepAssessmentBadgeTone = 'positive' | 'neutral' | 'warning' | 'alert';
+
+export interface DeepAssessmentCard {
+  badge_text: string;
+  badge_tone: DeepAssessmentBadgeTone;
+  analysis: string;
+  action_tip?: string;
+}
+
+export interface DeepAssessmentData {
+  overview?: string | DeepAssessmentCard;
+  body_matrix?: DeepAssessmentCard;
+  visceral_and_aging?: DeepAssessmentCard;
+  progress_comparison?: DeepAssessmentCard;
+  key_actions?: string[];
+  // Legacy string fields for backward compatibility with older DB records
+  bodyCompositionAnalysis?: string;
+  visceralAndAgingRisk?: string;
+  progressComparison?: string;
+}
+
 export interface AIHealthAnalysisContent {
   // Phần 1: Chỉ số cảnh báo
   warningMetrics: WarningMetricItem[];
   // Phần 2: Đánh giá chuyên sâu
-  deepAssessment: {
-    overview: string;
-    bodyCompositionAnalysis: string; // Cơ, mỡ, nước, xương
-    visceralAndAgingRisk: string; // Mỡ nội tạng và tốc độ lão hóa sinh học
-    progressComparison?: string; // So sánh tiến trình giữa các lần đo
-  };
+  deepAssessment: DeepAssessmentData;
   // Phần 3: Khuyến nghị hành động cụ thể
   actionRecommendations: ActionRecommendationItem[];
   // Phân tích chi tiết Mức Calo tối đa / tối thiểu theo cân nặng hiện tại, cân nặng mục tiêu và thời gian

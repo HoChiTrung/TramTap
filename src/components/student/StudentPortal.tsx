@@ -5,12 +5,13 @@
 
 import React, { useState, useEffect } from 'react';
 import confetti from 'canvas-confetti';
-import { StudentProfile } from '../../types/health';
+import { DeepAssessmentBadgeTone, StudentProfile } from '../../types/health';
 import { useHealth } from '../../context/HealthContext';
 import {
   calculateHealthScore,
   calculateWaterTarget,
   calculateCalorieGoalBreakdown,
+  resolveDeepAssessmentCard,
 } from '../../utils/healthCalculations';
 import { MetricsCharts } from '../common/MetricsCharts';
 import { NutritionTicketManager } from '../nutrition/NutritionTicketManager';
@@ -36,6 +37,28 @@ import {
 
 interface StudentPortalProps {
   student: StudentProfile;
+}
+
+const BADGE_TONE_CLASSES: Record<DeepAssessmentBadgeTone, string> = {
+  positive: 'bg-emerald-100/90 text-emerald-800 border-emerald-200',
+  neutral: 'bg-slate-100 text-slate-700 border-slate-200',
+  warning: 'bg-amber-100/90 text-amber-800 border-amber-200',
+  alert: 'bg-rose-100/90 text-rose-800 border-rose-200',
+};
+
+function renderFormattedText(text: string): React.ReactNode {
+  if (!text) return null;
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, idx) => {
+    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
+      return (
+        <strong key={idx} className="font-bold text-slate-900">
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    return <React.Fragment key={idx}>{part}</React.Fragment>;
+  });
 }
 
 export const StudentPortal: React.FC<StudentPortalProps> = ({ student }) => {
@@ -736,37 +759,98 @@ export const StudentPortal: React.FC<StudentPortalProps> = ({ student }) => {
                         </button>
 
                         {openAdviceParts.part2 && (
-                          <div className="px-3.5 pb-3.5 pt-1 border-t border-indigo-100">
+                          <div className="px-3.5 pb-3.5 pt-2 border-t border-indigo-100 space-y-2.5">
                             {latestAdvice.aiDraftContent.deepAssessment ? (
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-xs">
-                                <div className="p-3 bg-indigo-50/40 rounded-xl border border-indigo-100 space-y-1">
-                                  <div className="font-bold text-indigo-950 text-[11px]">Tổng quan thể trạng:</div>
-                                  <p className="text-slate-700 font-medium leading-relaxed">
-                                    {latestAdvice.aiDraftContent.deepAssessment.overview}
-                                  </p>
-                                </div>
+                              (() => {
+                                const da = latestAdvice.aiDraftContent.deepAssessment;
+                                const cards = [
+                                  {
+                                    title: 'Tổng quan thể trạng',
+                                    card: resolveDeepAssessmentCard(da.overview, undefined, 'Tổng quan'),
+                                  },
+                                  {
+                                    title: 'Ma trận Cơ - Mỡ - Nước - Xương',
+                                    card: resolveDeepAssessmentCard(
+                                      da.body_matrix,
+                                      da.bodyCompositionAnalysis,
+                                      'Thành phần cơ thể'
+                                    ),
+                                  },
+                                  {
+                                    title: 'Mỡ nội tạng & Lão hóa sinh học',
+                                    card: resolveDeepAssessmentCard(
+                                      da.visceral_and_aging,
+                                      da.visceralAndAgingRisk,
+                                      'Chuyển hóa'
+                                    ),
+                                  },
+                                  {
+                                    title: 'So sánh tiến trình biến động',
+                                    card: resolveDeepAssessmentCard(
+                                      da.progress_comparison,
+                                      da.progressComparison || 'Lần đo đầu tiên - mốc đối chiếu cơ sở.',
+                                      'Tiến trình'
+                                    ),
+                                  },
+                                ];
+                                const keyActions =
+                                  Array.isArray(da.key_actions) && da.key_actions.length > 0
+                                    ? da.key_actions
+                                    : cards
+                                        .map((c) => c.card.action_tip)
+                                        .filter((t): t is string => Boolean(t && t.trim()))
+                                        .slice(0, 3);
 
-                                <div className="p-3 bg-indigo-50/40 rounded-xl border border-indigo-100 space-y-1">
-                                  <div className="font-bold text-indigo-950 text-[11px]">Ma trận Cơ - Mỡ - Nước - Xương:</div>
-                                  <p className="text-slate-700 font-medium leading-relaxed">
-                                    {latestAdvice.aiDraftContent.deepAssessment.bodyCompositionAnalysis}
-                                  </p>
-                                </div>
+                                return (
+                                  <>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-xs">
+                                      {cards.map(({ title, card }, idx) => (
+                                        <div
+                                          key={idx}
+                                          className="p-3 bg-indigo-50/40 rounded-xl border border-indigo-100 flex flex-col justify-between gap-2"
+                                        >
+                                          <div className="space-y-1.5">
+                                            <div className="flex items-start justify-between gap-2">
+                                              <div className="font-bold text-indigo-950 text-[11px] leading-snug">
+                                                {title}
+                                              </div>
+                                              <span
+                                                className={`shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                                                  BADGE_TONE_CLASSES[card.badge_tone] || BADGE_TONE_CLASSES.neutral
+                                                }`}
+                                              >
+                                                {card.badge_text}
+                                              </span>
+                                            </div>
+                                            <p className="text-slate-700 font-medium leading-relaxed">
+                                              {renderFormattedText(card.analysis)}
+                                            </p>
+                                          </div>
+                                          {card.action_tip && (
+                                            <div className="pt-1.5 border-t border-indigo-100/80 text-[11px] text-indigo-900/90 leading-snug">
+                                              <span className="font-bold">Gợi ý:</span>{' '}
+                                              {renderFormattedText(card.action_tip)}
+                                            </div>
+                                          )}
+                                        </div>
+                                      ))}
+                                    </div>
 
-                                <div className="p-3 bg-indigo-50/40 rounded-xl border border-indigo-100 space-y-1">
-                                  <div className="font-bold text-indigo-950 text-[11px]">Mỡ nội tạng &amp; Lão hóa sinh học:</div>
-                                  <p className="text-slate-700 font-medium leading-relaxed">
-                                    {latestAdvice.aiDraftContent.deepAssessment.visceralAndAgingRisk}
-                                  </p>
-                                </div>
-
-                                <div className="p-3 bg-indigo-50/40 rounded-xl border border-indigo-100 space-y-1">
-                                  <div className="font-bold text-indigo-950 text-[11px]">So sánh tiến trình biến động:</div>
-                                  <p className="text-slate-700 font-medium leading-relaxed">
-                                    {latestAdvice.aiDraftContent.deepAssessment.progressComparison || 'Lần đo đầu tiên - mốc đối chiếu cơ sở.'}
-                                  </p>
-                                </div>
-                              </div>
+                                    {keyActions.length > 0 && (
+                                      <div className="p-3 rounded-xl bg-slate-50 border border-indigo-100/90 text-xs space-y-1">
+                                        <div className="font-extrabold text-indigo-950 text-[11px] uppercase tracking-wide">
+                                          Ưu tiên hành động
+                                        </div>
+                                        <ul className="list-disc pl-4 space-y-0.5 text-[11.5px] text-slate-700 font-medium">
+                                          {keyActions.map((act, i) => (
+                                            <li key={i}>{renderFormattedText(act)}</li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    )}
+                                  </>
+                                );
+                              })()
                             ) : (
                               <p className="text-xs text-slate-800 font-medium">
                                 {latestAdvice.aiDraftContent.summary}

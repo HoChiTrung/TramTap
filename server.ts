@@ -1565,6 +1565,24 @@ app.put('/api/advices/:id', async (req, res) => {
   }
 });
 
+function parseGeminiJson(rawText: string): any {
+  const cleaned = rawText
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      return JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
+    }
+    throw new Error('Không thể phân tích JSON từ phản hồi AI.');
+  }
+}
+
 // AI Health Analysis Endpoint
 app.post('/api/ai/analyze-health', async (req, res) => {
   try {
@@ -1601,12 +1619,15 @@ CƠ SỞ TÍNH CALO (4 YẾU TỐ):
 - ${calorieAnalysis.label}: ${calorieAnalysis.targetDailyCalories} Kcal/ngày (Đạm: ${calorieAnalysis.recommendedMacros.proteinGrams}g, Tinh bột: ${calorieAnalysis.recommendedMacros.carbsGrams}g, Chất béo: ${calorieAnalysis.recommendedMacros.fatGrams}g).
 
 LẦN ĐO HIỆN TẠI (${metric.date}):
-- Cân nặng: ${metric.weight}kg, Mỡ dưới da: ${metric.subcutaneousFat}%, Canxi xương: ${metric.boneCalcium}, Lượng nước: ${metric.bodyWater}%, Cơ bắp: ${metric.muscleMass}kg, Thể hình: "${metric.bodyType}", BMR: ${metric.bmr} Kcal, Tuổi sinh học: ${metric.biologicalAge} tuổi, Mỡ nội tạng: Cấp ${metric.visceralFat}, Vòng eo: ${metric.waist}cm.
-${previousMetric ? `LẦN ĐO TRƯỚC (${previousMetric.date}): Cân nặng: ${previousMetric.weight}kg, Cơ bắp: ${previousMetric.muscleMass}kg, Mỡ dưới da: ${previousMetric.subcutaneousFat}%, Mỡ nội tạng: Cấp ${previousMetric.visceralFat}, Tuổi sinh học: ${previousMetric.biologicalAge} tuổi.` : 'Lần đo đầu tiên.'}
+- Cân nặng: ${metric.weight}kg, Mỡ dưới da: ${metric.subcutaneousFat}%, Khối lượng xương: ${metric.boneCalcium}kg, Lượng nước: ${metric.bodyWater}%, Cơ bắp: ${metric.muscleMass}kg, Thể hình: "${metric.bodyType}", BMR: ${metric.bmr} Kcal, Tuổi sinh học: ${metric.biologicalAge} tuổi, Mỡ nội tạng: Cấp ${metric.visceralFat}, Vòng eo: ${metric.waist}cm.
+${previousMetric ? `LẦN ĐO TRƯỚC (${previousMetric.date}): Cân nặng: ${previousMetric.weight}kg, Cơ bắp: ${previousMetric.muscleMass}kg, Mỡ dưới da: ${previousMetric.subcutaneousFat}%, Lượng nước: ${previousMetric.bodyWater}%, Mỡ nội tạng: Cấp ${previousMetric.visceralFat}, Tuổi sinh học: ${previousMetric.biologicalAge} tuổi.` : 'Lần đo đầu tiên (chưa có dữ liệu lần trước — hãy ghi nhận đây là mốc chuẩn baseline).'}
 
 YÊU CẦU: Trả về JSON theo đúng 3 phần bắt buộc:
-1. warningMetrics: Danh sách các chỉ số bất thường kèm rủi ro bệnh lý cụ thể.
-2. deepAssessment: Đánh giá chuyên sâu 4 khía cạnh (overview, bodyCompositionAnalysis, visceralAndAgingRisk, progressComparison).
+1. warningMetrics: Danh sách các chỉ số bất thường kèm rủi ro cần lưu ý.
+2. deepAssessment: Đánh giá chuyên sâu gồm 4 thẻ có cấu trúc (overview, body_matrix, visceral_and_aging, progress_comparison) và mảng key_actions (2–3 gạch đầu dòng ưu tiên hành động ngắn gọn).
+   - Mỗi thẻ gồm: badge_text (2–4 chữ), badge_tone ("positive" | "neutral" | "warning" | "alert"), analysis (2–4 câu súc tích, dùng **...** để in đậm con số và từ khóa quan trọng, có liên kết nguyên nhân - kết quả giữa các chỉ số), action_tip (1 câu gợi ý hành động cụ thể, ngắn gọn).
+   - Đối chiếu ngưỡng tham chiếu theo giới tính (${student.gender}) & độ tuổi (${student.age} tuổi), đánh giá rõ Thấp / Đạt chuẩn / Hơi cao / Cao (đặc biệt tỷ lệ nước cơ thể và mỡ dưới da).
+   - Dùng thuật ngữ "khối lượng xương" (không dùng "canxi xương"). Không khẳng định y khoa tuyệt đối; dùng diễn đạt an toàn (vd: "nguy cơ rối loạn chuyển hóa liên quan đến mỡ nội tạng hiện ở mức thấp"). Tránh lỗi dư dấu chấm (..).
 3. actionRecommendations: Khuyến nghị hành động định lượng cụ thể về Dinh dưỡng (phải phân tích rõ mức Calo tối đa nạp mỗi ngày nếu giảm cân hoặc tối thiểu nạp mỗi ngày nếu tăng cân dựa trên cân nặng hiện tại ${calorieAnalysis.currentWeightKg}kg, cân nặng mục tiêu ${calorieAnalysis.targetWeightKg}kg, thời gian ${calorieAnalysis.durationWeeks} tuần và mức mỡ nội tạng cấp ${metric.visceralFat}), Tập luyện, Lối sống & Chuyển hóa.`;
 
       try {
@@ -1614,11 +1635,14 @@ YÊU CẦU: Trả về JSON theo đúng 3 phần bắt buộc:
           model: 'gemini-4-hydrogen',
           contents: userPrompt,
           config: {
-            systemInstruction: `Bạn là Chuyên gia Cao cấp về Y học Thể thao & Dinh dưỡng Chuyển hóa tại FitTrack Pro.
-QUY TẮC BẮT BUỘC: Tuyệt đối không mô tả chung chung. Bắt buộc phân tích sâu theo cấu trúc 3 phần:
-Phần 1: Chỉ số cảnh báo (warningMetrics) - Tên chỉ số, giá trị thực tế, ngưỡng chuẩn y khoa, mức độ nguy cơ và bệnh lý tiềm ẩn (tim mạch, gan nhiễm mỡ, kháng insulin, mất cơ xương...).
-Phần 2: Đánh giá chuyên sâu (deepAssessment) - Phân tích tỷ lệ Cơ/Mỡ/Nước, gánh nặng chuyển hóa BMR & tuổi sinh học, đối chiếu tiến độ với lần đo trước.
-Phần 3: Khuyến nghị hành động (actionRecommendations) - Định lượng cụ thể gam Protein/Carb/Fat, mức Calo trần (nếu giảm cân) hoặc Calo sàn (nếu tăng cân), bài tập kháng lực/Cardio nhịp tim Zone 2, lượng nước uống theo công thức 40ml/kg.`,
+            systemInstruction: `Bạn là Chuyên gia phân tích chỉ số cơ thể (BIA) và Huấn luyện viên thể hình chuyên nghiệp tại Trạm Tập.
+GIỌNG ĐIỆU: Gần gũi, khích lệ nhưng khách quan, dễ hiểu với người không chuyên.
+QUY TẮC BẮT BUỘC:
+1. Đối chiếu ngưỡng tham chiếu theo giới tính & độ tuổi để đánh giá rõ Thấp / Đạt chuẩn / Hơi cao / Cao (đặc biệt tỷ lệ nước cơ thể và mỡ dưới da).
+2. Liên kết nguyên nhân - kết quả giữa các thẻ trong Phần 2 (deepAssessment), tuyệt đối không mâu thuẫn: nếu cơ bắp tốt nhưng tuổi sinh học cao hơn tuổi thực, hãy giải thích xem có phải do thiếu nước hoặc mỡ dưới da cao làm giảm hiệu suất chuyển hóa không.
+3. Nếu có lần đo trước, phân tích ý nghĩa xu hướng (ví dụ: cân nặng giảm + cơ tăng + mỡ giảm = quá trình tăng cơ giảm mỡ hiệu quả). Nếu là lần đo đầu tiên, ghi nhận mốc chuẩn (baseline).
+4. Chuẩn hóa thuật ngữ: dùng "khối lượng xương" thay cho "canxi xương". KHÔNG dùng khẳng định y khoa tuyệt đối (như "bảo vệ an toàn khỏi các bệnh chuyển hóa", "không ghi nhận nguy cơ bệnh lý cấp tính"); thay bằng diễn đạt an toàn như "nguy cơ rối loạn chuyển hóa liên quan đến mỡ nội tạng hiện ở mức thấp". Kiểm tra kỹ chính tả và dấu câu (không dư "..").
+5. Phần 1 (warningMetrics) và Phần 3 (actionRecommendations) giữ đầy đủ định lượng Protein/Carb/Fat, Calo trần/sàn, bài tập kháng lực/Cardio Zone 2, lượng nước 40ml/kg.`,
             responseMimeType: 'application/json',
             responseSchema: {
               type: Type.OBJECT,
@@ -1640,16 +1664,57 @@ Phần 3: Khuyến nghị hành động (actionRecommendations) - Định lượ
                 deepAssessment: {
                   type: Type.OBJECT,
                   properties: {
-                    overview: { type: Type.STRING },
-                    bodyCompositionAnalysis: { type: Type.STRING },
-                    visceralAndAgingRisk: { type: Type.STRING },
-                    progressComparison: { type: Type.STRING },
+                    overview: {
+                      type: Type.OBJECT,
+                      properties: {
+                        badge_text: { type: Type.STRING },
+                        badge_tone: { type: Type.STRING, enum: ['positive', 'neutral', 'warning', 'alert'] },
+                        analysis: { type: Type.STRING },
+                        action_tip: { type: Type.STRING },
+                      },
+                      required: ['badge_text', 'badge_tone', 'analysis', 'action_tip'],
+                    },
+                    body_matrix: {
+                      type: Type.OBJECT,
+                      properties: {
+                        badge_text: { type: Type.STRING },
+                        badge_tone: { type: Type.STRING, enum: ['positive', 'neutral', 'warning', 'alert'] },
+                        analysis: { type: Type.STRING },
+                        action_tip: { type: Type.STRING },
+                      },
+                      required: ['badge_text', 'badge_tone', 'analysis', 'action_tip'],
+                    },
+                    visceral_and_aging: {
+                      type: Type.OBJECT,
+                      properties: {
+                        badge_text: { type: Type.STRING },
+                        badge_tone: { type: Type.STRING, enum: ['positive', 'neutral', 'warning', 'alert'] },
+                        analysis: { type: Type.STRING },
+                        action_tip: { type: Type.STRING },
+                      },
+                      required: ['badge_text', 'badge_tone', 'analysis', 'action_tip'],
+                    },
+                    progress_comparison: {
+                      type: Type.OBJECT,
+                      properties: {
+                        badge_text: { type: Type.STRING },
+                        badge_tone: { type: Type.STRING, enum: ['positive', 'neutral', 'warning', 'alert'] },
+                        analysis: { type: Type.STRING },
+                        action_tip: { type: Type.STRING },
+                      },
+                      required: ['badge_text', 'badge_tone', 'analysis', 'action_tip'],
+                    },
+                    key_actions: {
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING },
+                    },
                   },
                   required: [
                     'overview',
-                    'bodyCompositionAnalysis',
-                    'visceralAndAgingRisk',
-                    'progressComparison',
+                    'body_matrix',
+                    'visceral_and_aging',
+                    'progress_comparison',
+                    'key_actions',
                   ],
                 },
                 actionRecommendations: {
@@ -1690,8 +1755,8 @@ Phần 3: Khuyến nghị hành động (actionRecommendations) - Định lượ
           },
         });
 
-        const rawText = (response.text || '').trim();
-        const parsed = JSON.parse(rawText);
+        const rawText = response.text || '';
+        const parsed = parseGeminiJson(rawText);
         if (parsed && Array.isArray(parsed.warningMetrics)) {
           parsed.calorieAnalysis = calorieAnalysis;
           parsed.calorieTargetKcal = calorieAnalysis.targetDailyCalories;
