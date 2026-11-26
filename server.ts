@@ -73,7 +73,7 @@ function resolveDatabaseConfig(): {
     // Strip accidental whitespace, newlines, or surrounding quotes copied from .env.example
     const cleaned = candidate.value?.trim().replace(/^["']+|["']+$/g, '').trim();
     if (!cleaned) continue;
-    if (cleaned.includes('YOUR_AIVEN_PASSWORD')) {
+    if (cleaned.includes('YOUR_AIVEN_PASSWORD') || cleaned.includes('[YOUR-PASSWORD]')) {
       foundPlaceholder = true;
       continue;
     }
@@ -87,10 +87,11 @@ function stripSslModeParam(uri: string): string {
   try {
     const parsed = new URL(uri);
     parsed.searchParams.delete('sslmode');
+    parsed.searchParams.delete('pgbouncer');
     return parsed.toString();
   } catch {
     return uri
-      .replace(/([?&])sslmode=[^&]*&?/i, '$1')
+      .replace(/([?&])(sslmode|pgbouncer)=[^&]*&?/gi, '$1')
       .replace(/[?&]$/, '');
   }
 }
@@ -99,18 +100,25 @@ const resolvedDbConfig = resolveDatabaseConfig();
 const rawConnectionString = resolvedDbConfig.rawUri;
 const cleanConnectionString = stripSslModeParam(rawConnectionString);
 
-function parseDbInfo(uri: string): { host: string; databaseName: string } {
+function parseDbInfo(uri: string): { host: string; databaseName: string; provider: string } {
   if (!uri) {
-    return { host: 'Chưa cấu hình DATABASE_URL', databaseName: 'defaultdb' };
+    return { host: 'Chưa cấu hình DATABASE_URL', databaseName: 'postgres', provider: 'PostgreSQL' };
   }
   try {
     const parsed = new URL(uri);
+    const host = parsed.hostname || 'localhost';
+    const provider = host.includes('supabase')
+      ? 'Supabase'
+      : host.includes('aiven')
+        ? 'Aiven Cloud'
+        : 'PostgreSQL';
     return {
-      host: parsed.hostname || 'aivencloud.com',
-      databaseName: parsed.pathname?.replace(/^\//, '') || 'defaultdb',
+      host,
+      databaseName: parsed.pathname?.replace(/^\//, '') || 'postgres',
+      provider,
     };
   } catch {
-    return { host: 'Aiven Cloud PostgreSQL', databaseName: 'defaultdb' };
+    return { host: 'PostgreSQL', databaseName: 'postgres', provider: 'PostgreSQL' };
   }
 }
 
@@ -140,7 +148,7 @@ let initPromise: Promise<boolean> | null = null;
 let lastDbError: string | null = null;
 
 const DB_CONNECTION_ERROR_MSG =
-  'Không thể kết nối đến Cơ sở dữ liệu PostgreSQL (Aiven Cloud). Hệ thống KHÔNG lưu vào bộ nhớ tạm để tránh mất dữ liệu. Vui lòng kiểm tra lại biến môi trường DATABASE_URL!';
+  'Không thể kết nối đến Cơ sở dữ liệu PostgreSQL. Hệ thống KHÔNG lưu vào bộ nhớ tạm để tránh mất dữ liệu. Vui lòng kiểm tra lại biến môi trường DATABASE_URL!';
 
 function formatDbErrorMessage(detail?: string | null): string {
   const cleanDetail = detail?.trim();
@@ -154,7 +162,7 @@ async function initDatabase(): Promise<boolean> {
   if (!cleanConnectionString) {
     dbInitialized = false;
     lastDbError = resolvedDbConfig.hasPlaceholder
-      ? 'Biến môi trường DATABASE_URL đang dùng mật khẩu mẫu (YOUR_AIVEN_PASSWORD). Vui lòng thay bằng Service URI thật từ Aiven Cloud rồi Redeploy!'
+      ? 'Biến môi trường DATABASE_URL đang dùng mật khẩu mẫu. Vui lòng thay bằng mật khẩu thật rồi khởi động lại / Redeploy!'
       : 'Thiếu biến môi trường DATABASE_URL trên máy chủ (Vercel -> Settings -> Environment Variables -> chọn Production & Preview rồi Redeploy).';
     console.error('❌', lastDbError);
     return false;
@@ -645,7 +653,7 @@ async function initDatabase(): Promise<boolean> {
 
     dbInitialized = true;
     lastDbError = null;
-    console.log(`✅ Connected to Aiven PostgreSQL database: ${dbInfo.databaseName} (${dbInfo.host})`);
+    console.log(`✅ Connected to ${dbInfo.provider} PostgreSQL database: ${dbInfo.databaseName} (${dbInfo.host})`);
     return true;
   } catch (err) {
     dbInitialized = false;
@@ -688,7 +696,7 @@ function handleDbRouteError(res: express.Response, err: unknown) {
   return res.status(500).json({ error: msg });
 }
 
-// Health Check API (Verifies live connection to Aiven PostgreSQL)
+// Health Check API (Verifies live connection to PostgreSQL)
 app.get('/api/health', async (req, res) => {
   const runtimeInfo = {
     backendRunning: true,
@@ -705,7 +713,7 @@ app.get('/api/health', async (req, res) => {
       status: 'ok',
       ...runtimeInfo,
       databaseConnected: true,
-      dbType: 'PostgreSQL (Aiven Cloud)',
+      dbType: `PostgreSQL (${dbInfo.provider})`,
       databaseName: dbInfo.databaseName,
       host: dbInfo.host,
       timestamp: new Date().toISOString(),
@@ -720,7 +728,7 @@ app.get('/api/health', async (req, res) => {
       status: 'error',
       ...runtimeInfo,
       databaseConnected: false,
-      dbType: 'PostgreSQL (Aiven Cloud - Disconnected)',
+      dbType: `PostgreSQL (${dbInfo.provider} - Disconnected)`,
       databaseName: dbInfo.databaseName,
       host: dbInfo.host,
       error: formatDbErrorMessage(errMsg),
