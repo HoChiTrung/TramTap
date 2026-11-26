@@ -52,28 +52,52 @@ function compactJson<T extends Record<string, any>>(obj: T | undefined | null): 
 }
 
 // Aiven PostgreSQL Database Connection (via Vercel / local environment variables)
-function resolveDatabaseUrl(): string {
-  const candidates = [
-    process.env.DATABASE_URL,
-    process.env.POSTGRES_URL,
-    process.env.AIVEN_DATABASE_URL,
+function resolveDatabaseConfig(): {
+  rawUri: string;
+  sourceKey: string | null;
+  hasPlaceholder: boolean;
+} {
+  const candidates: Array<{ key: string; value: string | undefined }> = [
+    { key: 'DATABASE_URL', value: process.env.DATABASE_URL },
+    { key: 'POSTGRES_URL', value: process.env.POSTGRES_URL },
+    { key: 'POSTGRES_URL_NON_POOLING', value: process.env.POSTGRES_URL_NON_POOLING },
+    { key: 'POSTGRES_PRISMA_URL', value: process.env.POSTGRES_PRISMA_URL },
+    { key: 'AIVEN_DATABASE_URL', value: process.env.AIVEN_DATABASE_URL },
+    { key: 'AIVEN_POSTGRES_URL', value: process.env.AIVEN_POSTGRES_URL },
+    { key: 'DATABASE_URI', value: process.env.DATABASE_URI },
+    { key: 'POSTGRES_URI', value: process.env.POSTGRES_URI },
   ];
+
+  let foundPlaceholder = false;
   for (const candidate of candidates) {
-    const trimmed = candidate?.trim();
-    if (trimmed && !trimmed.includes('YOUR_AIVEN_PASSWORD')) {
-      return trimmed;
+    // Strip accidental whitespace, newlines, or surrounding quotes copied from .env.example
+    const cleaned = candidate.value?.trim().replace(/^["']+|["']+$/g, '').trim();
+    if (!cleaned) continue;
+    if (cleaned.includes('YOUR_AIVEN_PASSWORD')) {
+      foundPlaceholder = true;
+      continue;
     }
+    return { rawUri: cleaned, sourceKey: candidate.key, hasPlaceholder: false };
   }
-  return '';
+  return { rawUri: '', sourceKey: null, hasPlaceholder: foundPlaceholder };
 }
 
-const rawConnectionString = resolveDatabaseUrl();
-const cleanConnectionString = rawConnectionString
-  ? rawConnectionString
-      .replace(/[?&]sslmode=[^&]+/, '')
-      .replace(/\?&/, '?')
-      .replace(/\?$/, '')
-  : '';
+function stripSslModeParam(uri: string): string {
+  if (!uri) return '';
+  try {
+    const parsed = new URL(uri);
+    parsed.searchParams.delete('sslmode');
+    return parsed.toString();
+  } catch {
+    return uri
+      .replace(/([?&])sslmode=[^&]*&?/i, '$1')
+      .replace(/[?&]$/, '');
+  }
+}
+
+const resolvedDbConfig = resolveDatabaseConfig();
+const rawConnectionString = resolvedDbConfig.rawUri;
+const cleanConnectionString = stripSslModeParam(rawConnectionString);
 
 function parseDbInfo(uri: string): { host: string; databaseName: string } {
   if (!uri) {
@@ -117,12 +141,20 @@ let lastDbError: string | null = null;
 const DB_CONNECTION_ERROR_MSG =
   'Không thể kết nối đến Cơ sở dữ liệu PostgreSQL (Aiven Cloud). Hệ thống KHÔNG lưu vào bộ nhớ tạm để tránh mất dữ liệu. Vui lòng kiểm tra lại biến môi trường DATABASE_URL!';
 
+function formatDbErrorMessage(detail?: string | null): string {
+  const cleanDetail = detail?.trim();
+  if (!cleanDetail) return DB_CONNECTION_ERROR_MSG;
+  if (cleanDetail.startsWith(DB_CONNECTION_ERROR_MSG)) return cleanDetail;
+  return `${DB_CONNECTION_ERROR_MSG} (Chi tiết: ${cleanDetail})`;
+}
+
 // Initialize Database Tables in PostgreSQL (Strictly Database-only, no temporary local fallback)
 async function initDatabase(): Promise<boolean> {
   if (!cleanConnectionString) {
     dbInitialized = false;
-    lastDbError =
-      'Thiếu biến môi trường DATABASE_URL để kết nối Aiven PostgreSQL.';
+    lastDbError = resolvedDbConfig.hasPlaceholder
+      ? 'Biến môi trường DATABASE_URL đang dùng mật khẩu mẫu (YOUR_AIVEN_PASSWORD). Vui lòng thay bằng Service URI thật từ Aiven Cloud rồi Redeploy!'
+      : 'Thiếu biến môi trường DATABASE_URL trên máy chủ (Vercel -> Settings -> Environment Variables -> chọn Production & Preview rồi Redeploy).';
     console.error('❌', lastDbError);
     return false;
   }
@@ -633,9 +665,7 @@ async function ensureDbReady(): Promise<void> {
   }
   const ok = await initPromise;
   if (!ok) {
-    throw new Error(
-      `${DB_CONNECTION_ERROR_MSG}${lastDbError ? ` (Chi tiết: ${lastDbError})` : ''}`
-    );
+    throw new Error(formatDbErrorMessage(lastDbError));
   }
 }
 
@@ -646,9 +676,11 @@ function handleDbRouteError(res: express.Response, err: unknown) {
     /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|timeout|terminated|Connection|SSL|connect/i.test(msg);
   if (isConnErr) {
     dbInitialized = false;
-    lastDbError = msg;
+    if (!msg.startsWith(DB_CONNECTION_ERROR_MSG)) {
+      lastDbError = msg;
+    }
     return res.status(503).json({
-      error: `${DB_CONNECTION_ERROR_MSG} (${msg})`,
+      error: formatDbErrorMessage(msg),
       dbDisconnected: true,
     });
   }
@@ -657,11 +689,20 @@ function handleDbRouteError(res: express.Response, err: unknown) {
 
 // Health Check API (Verifies live connection to Aiven PostgreSQL)
 app.get('/api/health', async (req, res) => {
+  const runtimeInfo = {
+    backendRunning: true,
+    runtime: isServerless ? 'vercel-serverless' : 'node-server',
+    vercelEnv: process.env.VERCEL_ENV || null,
+    envConfigured: Boolean(cleanConnectionString),
+    envKey: resolvedDbConfig.sourceKey,
+  };
+
   try {
     await ensureDbReady();
     await pool.query('SELECT 1');
     return res.json({
       status: 'ok',
+      ...runtimeInfo,
       databaseConnected: true,
       dbType: 'PostgreSQL (Aiven Cloud)',
       databaseName: dbInfo.databaseName,
@@ -670,14 +711,18 @@ app.get('/api/health', async (req, res) => {
     });
   } catch (err) {
     dbInitialized = false;
-    lastDbError = getErrMessage(err);
+    const errMsg = getErrMessage(err);
+    if (!errMsg.startsWith(DB_CONNECTION_ERROR_MSG)) {
+      lastDbError = errMsg;
+    }
     return res.status(503).json({
       status: 'error',
+      ...runtimeInfo,
       databaseConnected: false,
       dbType: 'PostgreSQL (Aiven Cloud - Disconnected)',
       databaseName: dbInfo.databaseName,
       host: dbInfo.host,
-      error: `${DB_CONNECTION_ERROR_MSG} (${lastDbError})`,
+      error: formatDbErrorMessage(errMsg),
       timestamp: new Date().toISOString(),
     });
   }
