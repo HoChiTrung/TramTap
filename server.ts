@@ -124,9 +124,10 @@ const pool = new Pool({
         rejectUnauthorized: false,
       }
     : undefined,
-  max: isServerless ? 3 : 10,
-  idleTimeoutMillis: isServerless ? 10000 : 30000,
+  max: isServerless ? 1 : 3,
+  idleTimeoutMillis: isServerless ? 3000 : 5000,
   connectionTimeoutMillis: 10000,
+  allowExitOnIdle: isServerless,
 });
 
 pool.on('error', (err) => {
