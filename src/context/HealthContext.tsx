@@ -197,8 +197,8 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     error?: string;
   }>({
     connected: true,
-    name: 'defaultdb (PostgreSQL)',
-    host: 'pg-1d2d7843-chitrung7542-3ac1.e.aivencloud.com',
+    name: 'defaultdb (Aiven PostgreSQL)',
+    host: 'aivencloud.com',
   });
   const [dbError, setDbError] = useState<string | null>(null);
 
@@ -355,8 +355,8 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (!healthCheck) {
         setDbStatus({
           connected: false,
-          name: 'defaultdb (PostgreSQL)',
-          host: 'pg-1d2d7843-chitrung7542-3ac1.e.aivencloud.com',
+          name: 'defaultdb (Aiven PostgreSQL)',
+          host: 'aivencloud.com',
           error: DEFAULT_DB_DISCONNECTED_MSG,
         });
         setDbError(DEFAULT_DB_DISCONNECTED_MSG);
@@ -368,8 +368,8 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const errMsg = healthData?.error || DEFAULT_DB_DISCONNECTED_MSG;
         setDbStatus({
           connected: false,
-          name: `${healthData?.databaseName || 'defaultdb'} (PostgreSQL)`,
-          host: healthData?.host || 'pg-1d2d7843-chitrung7542-3ac1.e.aivencloud.com',
+          name: `${healthData?.databaseName || 'defaultdb'} (Aiven PostgreSQL)`,
+          host: healthData?.host || 'aivencloud.com',
           error: errMsg,
         });
         setDbError(errMsg);
@@ -378,8 +378,8 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       setDbStatus({
         connected: true,
-        name: `${healthData.databaseName || 'defaultdb'} (PostgreSQL)`,
-        host: healthData.host || 'pg-1d2d7843-chitrung7542-3ac1.e.aivencloud.com',
+        name: `${healthData.databaseName || 'defaultdb'} (Aiven PostgreSQL)`,
+        host: healthData.host || 'aivencloud.com',
       });
       setDbError(null);
 

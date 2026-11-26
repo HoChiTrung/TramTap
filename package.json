@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx server.ts",
+    "dev": "tsx watch --clear-screen=false --exclude src/** --exclude dist/** --exclude public/** server.ts",
     "build": "vite build && esbuild server.ts --platform=node --bundle --format=esm --banner:js=\"// @ts-nocheck\" --outfile=dist/server.js --external:express --external:pg --external:dotenv --external:@google/genai --external:vite",
     "start": "node server.ts",
     "preview": "vite preview",
@@ -13,9 +13,11 @@
   },
   "dependencies": {
     "@google/genai": "^2.32.0",
+    "@supabase/server": "^1.9.2",
     "@tailwindcss/vite": "^4.3.3",
     "@types/canvas-confetti": "^1.9.0",
     "@types/pg": "^8.23.1",
+    "@vercel/speed-insights": "^2.1.0",
     "@vitejs/plugin-react": "^6.1.1",
     "canvas-confetti": "^1.9.4",
     "dotenv": "^17.2.3",

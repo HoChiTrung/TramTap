@@ -51,29 +51,58 @@ function compactJson<T extends Record<string, any>>(obj: T | undefined | null): 
   return out;
 }
 
-// Aiven PostgreSQL Database Connection (pg-1d2d7843-chitrung7542-3ac1.e.aivencloud.com:21684/defaultdb)
-const defaultDbAuth = ['AVNS', 's3SWghQ-cl8YXZIA6Tz'].join('_');
-const defaultDbHost = 'pg-1d2d7843-chitrung7542-3ac1.e.aivencloud.com';
-const DEFAULT_AIVEN_URI = `postgres://avnadmin:${defaultDbAuth}@${defaultDbHost}:21684/defaultdb?sslmode=require`;
+// Aiven PostgreSQL Database Connection (via Vercel / local environment variables)
+function resolveDatabaseUrl(): string {
+  const candidates = [
+    process.env.DATABASE_URL,
+    process.env.POSTGRES_URL,
+    process.env.AIVEN_DATABASE_URL,
+  ];
+  for (const candidate of candidates) {
+    const trimmed = candidate?.trim();
+    if (trimmed && !trimmed.includes('YOUR_AIVEN_PASSWORD')) {
+      return trimmed;
+    }
+  }
+  return '';
+}
 
-const envDbUrl = process.env.DATABASE_URL?.trim();
-const rawConnectionString =
-  envDbUrl &&
-  !envDbUrl.includes('pg-1b132c35-chitrung7542-3ac1') &&
-  !envDbUrl.includes('YOUR_AIVEN_PASSWORD')
-    ? envDbUrl
-    : DEFAULT_AIVEN_URI;
+const rawConnectionString = resolveDatabaseUrl();
+const cleanConnectionString = rawConnectionString
+  ? rawConnectionString
+      .replace(/[?&]sslmode=[^&]+/, '')
+      .replace(/\?&/, '?')
+      .replace(/\?$/, '')
+  : '';
 
-const cleanConnectionString = rawConnectionString.replace(/[?&]sslmode=[^&]+/, '');
+function parseDbInfo(uri: string): { host: string; databaseName: string } {
+  if (!uri) {
+    return { host: 'Chưa cấu hình DATABASE_URL', databaseName: 'defaultdb' };
+  }
+  try {
+    const parsed = new URL(uri);
+    return {
+      host: parsed.hostname || 'aivencloud.com',
+      databaseName: parsed.pathname?.replace(/^\//, '') || 'defaultdb',
+    };
+  } catch {
+    return { host: 'Aiven Cloud PostgreSQL', databaseName: 'defaultdb' };
+  }
+}
+
+const dbInfo = parseDbInfo(rawConnectionString);
+const isServerless = Boolean(process.env.VERCEL);
 
 const pool = new Pool({
-  connectionString: cleanConnectionString,
-  ssl: {
-    rejectUnauthorized: false,
-  },
-  max: 10,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 8000,
+  connectionString: cleanConnectionString || undefined,
+  ssl: cleanConnectionString
+    ? {
+        rejectUnauthorized: false,
+      }
+    : undefined,
+  max: isServerless ? 3 : 10,
+  idleTimeoutMillis: isServerless ? 10000 : 30000,
+  connectionTimeoutMillis: 10000,
 });
 
 pool.on('error', (err) => {
@@ -82,13 +111,22 @@ pool.on('error', (err) => {
 });
 
 let dbInitialized = false;
+let initPromise: Promise<boolean> | null = null;
 let lastDbError: string | null = null;
 
 const DB_CONNECTION_ERROR_MSG =
-  'Không thể kết nối đến Cơ sở dữ liệu PostgreSQL (Aiven Cloud). Hệ thống KHÔNG lưu vào bộ nhớ tạm để tránh mất dữ liệu. Vui lòng kiểm tra lại kết nối Database!';
+  'Không thể kết nối đến Cơ sở dữ liệu PostgreSQL (Aiven Cloud). Hệ thống KHÔNG lưu vào bộ nhớ tạm để tránh mất dữ liệu. Vui lòng kiểm tra lại biến môi trường DATABASE_URL!';
 
 // Initialize Database Tables in PostgreSQL (Strictly Database-only, no temporary local fallback)
 async function initDatabase(): Promise<boolean> {
+  if (!cleanConnectionString) {
+    dbInitialized = false;
+    lastDbError =
+      'Thiếu biến môi trường DATABASE_URL để kết nối Aiven PostgreSQL.';
+    console.error('❌', lastDbError);
+    return false;
+  }
+
   let client;
   try {
     client = await pool.connect();
@@ -574,7 +612,7 @@ async function initDatabase(): Promise<boolean> {
 
     dbInitialized = true;
     lastDbError = null;
-    console.log('✅ Connected to Aiven PostgreSQL database: defaultdb (pg-1d2d7843-chitrung7542-3ac1.e.aivencloud.com)');
+    console.log(`✅ Connected to Aiven PostgreSQL database: ${dbInfo.databaseName} (${dbInfo.host})`);
     return true;
   } catch (err) {
     dbInitialized = false;
@@ -587,13 +625,17 @@ async function initDatabase(): Promise<boolean> {
 }
 
 async function ensureDbReady(): Promise<void> {
-  if (!dbInitialized) {
-    const ok = await initDatabase();
-    if (!ok) {
-      throw new Error(
-        `${DB_CONNECTION_ERROR_MSG}${lastDbError ? ` (Chi tiết: ${lastDbError})` : ''}`
-      );
-    }
+  if (dbInitialized) return;
+  if (!initPromise) {
+    initPromise = initDatabase().finally(() => {
+      initPromise = null;
+    });
+  }
+  const ok = await initPromise;
+  if (!ok) {
+    throw new Error(
+      `${DB_CONNECTION_ERROR_MSG}${lastDbError ? ` (Chi tiết: ${lastDbError})` : ''}`
+    );
   }
 }
 
@@ -622,8 +664,8 @@ app.get('/api/health', async (req, res) => {
       status: 'ok',
       databaseConnected: true,
       dbType: 'PostgreSQL (Aiven Cloud)',
-      databaseName: 'defaultdb',
-      host: 'pg-1d2d7843-chitrung7542-3ac1.e.aivencloud.com',
+      databaseName: dbInfo.databaseName,
+      host: dbInfo.host,
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
@@ -633,8 +675,8 @@ app.get('/api/health', async (req, res) => {
       status: 'error',
       databaseConnected: false,
       dbType: 'PostgreSQL (Aiven Cloud - Disconnected)',
-      databaseName: 'defaultdb',
-      host: 'pg-1d2d7843-chitrung7542-3ac1.e.aivencloud.com',
+      databaseName: dbInfo.databaseName,
+      host: dbInfo.host,
       error: `${DB_CONNECTION_ERROR_MSG} (${lastDbError})`,
       timestamp: new Date().toISOString(),
     });
@@ -2735,7 +2777,7 @@ async function startServer() {
   ];
   const distDir = candidatePaths.find((p) => fs.existsSync(path.resolve(p, 'index.html')));
 
-  if (process.env.NODE_ENV === 'production' || (!process.env.NODE_ENV && distDir)) {
+  if (process.env.NODE_ENV === 'production') {
     if (distDir) {
       console.log(`📦 Serving static production build from: ${distDir}`);
       app.use(express.static(distDir));
@@ -2753,6 +2795,7 @@ async function startServer() {
         appType: 'spa',
       });
       app.use(vite.middlewares);
+      console.log('⚡ Vite HMR dev middleware enabled (auto live-reload)');
     } catch (err) {
       console.warn('Vite dev middleware could not be loaded, falling back to static:', err);
       if (distDir) {
@@ -2765,10 +2808,15 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 FitTrack Pro server running on http://0.0.0.0:${PORT}`);
+    console.log(`🚀 FitTrack Pro server running on http://localhost:${PORT}`);
   });
 }
 
-startServer().catch((err) => {
-  console.error('Failed to start server:', err);
-});
+if (!process.env.VERCEL) {
+  startServer().catch((err) => {
+    console.error('Failed to start server:', err);
+  });
+}
+
+export { app };
+export default app;

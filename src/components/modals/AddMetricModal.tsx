@@ -7,19 +7,67 @@ import React, { useState } from 'react';
 import { StudentProfile, HealthMetricRecord, BodyTypeClassification } from '../../types/health';
 import { useHealth } from '../../context/HealthContext';
 import { calculateHealthScore } from '../../utils/healthCalculations';
-import {
-  X,
-  PlusCircle,
-  AlertTriangle,
-  Scale,
-  Sparkles,
-  Info,
-} from 'lucide-react';
+import { X, AlertTriangle, Scale, Sparkles } from 'lucide-react';
 
 interface AddMetricModalProps {
   student: StudentProfile;
   latestMetric?: HealthMetricRecord;
   onClose: () => void;
+}
+
+/**
+ * Smart decimal input formatter:
+ * - Converts ',' to '.' and strips invalid characters.
+ * - Never interferes when the user is deleting (Backspace) or already typed '.'.
+ * - Auto-inserts '.' after `intDigits` digits when typing continuously
+ *   (e.g. '347' -> '34.7', '123' -> '12.3', '28' -> '2.8').
+ */
+function formatSmartDecimal(
+  raw: string,
+  prev: string,
+  opts: { intDigits: number; maxDecimals?: number; minAutoSplit?: number; allowExactTen?: boolean }
+): string {
+  const { intDigits, maxDecimals = 1, minAutoSplit, allowExactTen = false } = opts;
+
+  let cleaned = raw.replace(/,/g, '.').replace(/[^0-9.]/g, '');
+  const firstDot = cleaned.indexOf('.');
+  if (firstDot !== -1) {
+    cleaned =
+      cleaned.slice(0, firstDot + 1) + cleaned.slice(firstDot + 1).replace(/\./g, '');
+  }
+
+  // Do not auto-format when deleting characters
+  if (cleaned.length < prev.length) {
+    return cleaned;
+  }
+
+  // Respect explicit decimal point entered by user
+  if (cleaned.includes('.')) {
+    const [intPart, decPart = ''] = cleaned.split('.');
+    return `${intPart}.${decPart.slice(0, maxDecimals)}`;
+  }
+
+  // Auto-insert decimal when exceeding integer digit count
+  if (cleaned.length > intDigits) {
+    if (allowExactTen && cleaned === '10') {
+      return '10';
+    }
+    if (minAutoSplit !== undefined && cleaned.length === intDigits + 1) {
+      const asNum = Number(cleaned);
+      if (asNum < minAutoSplit) {
+        return cleaned;
+      }
+    }
+    const intPart = cleaned.slice(0, intDigits);
+    const decPart = cleaned.slice(intDigits, intDigits + maxDecimals);
+    return `${intPart}.${decPart}`;
+  }
+
+  return cleaned;
+}
+
+function formatIntegerOnly(raw: string, maxLen: number): string {
+  return raw.replace(/\D/g, '').slice(0, maxLen);
 }
 
 export const AddMetricModal: React.FC<AddMetricModalProps> = ({
@@ -29,83 +77,83 @@ export const AddMetricModal: React.FC<AddMetricModalProps> = ({
 }) => {
   const { addMetricRecord } = useHealth();
 
-  // Form State initialized with either latest metric or smart defaults
+  // Start empty so trainer can type immediately without deleting prefilled values
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [weight, setWeight] = useState(latestMetric ? String(latestMetric.weight) : '70.0');
-  const [subcutaneousFat, setSubcutaneousFat] = useState(
-    latestMetric ? String(latestMetric.subcutaneousFat) : '20.0'
-  );
-  const [boneCalcium, setBoneCalcium] = useState(
-    latestMetric ? String(latestMetric.boneCalcium) : '3.0'
-  );
-  const [bodyWater, setBodyWater] = useState(
-    latestMetric ? String(latestMetric.bodyWater) : '55.0'
-  );
-  const [muscleMass, setMuscleMass] = useState(
-    latestMetric ? String(latestMetric.muscleMass) : '32.0'
-  );
-  const [bodyType, setBodyType] = useState<BodyTypeClassification>(
+  const [weight, setWeight] = useState('');
+  const [subcutaneousFat, setSubcutaneousFat] = useState('');
+  const [boneCalcium, setBoneCalcium] = useState('');
+  const [bodyWater, setBodyWater] = useState('');
+  const [muscleMass, setMuscleMass] = useState('');
+  const [bodyType] = useState<BodyTypeClassification>(
     latestMetric ? latestMetric.bodyType : 'Tiêu chuẩn'
   );
-  const [bmr, setBmr] = useState(latestMetric ? String(latestMetric.bmr) : '1600');
-  const [biologicalAge, setBiologicalAge] = useState(
-    latestMetric ? String(latestMetric.biologicalAge) : String(student.age)
-  );
-  const [visceralFat, setVisceralFat] = useState(
-    latestMetric ? String(latestMetric.visceralFat) : '6'
-  );
-  const [waist, setWaist] = useState(latestMetric ? String(latestMetric.waist) : '80.0');
+  const [bmr, setBmr] = useState('');
+  const [biologicalAge, setBiologicalAge] = useState('');
+  const [visceralFat, setVisceralFat] = useState('');
+  const [waist] = useState(latestMetric ? String(latestMetric.waist) : '80.0');
   const [notes, setNotes] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Real-time Preview Calculation
+  const hasPreviewData = Boolean(weight && subcutaneousFat && muscleMass);
+
+  // Real-time Preview Calculation (only shown when user starts entering values)
   const tempMetric: HealthMetricRecord = {
     id: 'temp',
     studentId: student.id,
     date,
     timestamp: Date.now(),
-    weight: parseFloat(weight) || 70,
-    subcutaneousFat: parseFloat(subcutaneousFat) || 20,
-    boneCalcium: parseFloat(boneCalcium) || 3,
-    bodyWater: parseFloat(bodyWater) || 55,
-    muscleMass: parseFloat(muscleMass) || 32,
+    weight: parseFloat(weight) || latestMetric?.weight || 65,
+    subcutaneousFat: parseFloat(subcutaneousFat) || latestMetric?.subcutaneousFat || 20,
+    boneCalcium: parseFloat(boneCalcium) || latestMetric?.boneCalcium || 3,
+    bodyWater: parseFloat(bodyWater) || latestMetric?.bodyWater || 55,
+    muscleMass: parseFloat(muscleMass) || latestMetric?.muscleMass || 32,
     bodyType,
-    bmr: parseInt(bmr, 10) || 1600,
-    biologicalAge: parseInt(biologicalAge, 10) || student.age,
-    visceralFat: parseInt(visceralFat, 10) || 5,
+    bmr: parseInt(bmr, 10) || latestMetric?.bmr || 1500,
+    biologicalAge: parseInt(biologicalAge, 10) || latestMetric?.biologicalAge || student.age,
+    visceralFat: parseInt(visceralFat, 10) || latestMetric?.visceralFat || 5,
     waist: parseFloat(waist) || 80,
   };
 
-  const scorePreview = calculateHealthScore(student, tempMetric);
+  const scorePreview = hasPreviewData ? calculateHealthScore(student, tempMetric) : null;
+
+  const clearFieldError = (field: string) => {
+    if (errors[field]) {
+      setErrors((prev) => {
+        const next = { ...prev };
+        delete next[field];
+        return next;
+      });
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const newErrors: Record<string, string> = {};
 
     const w = parseFloat(weight);
-    if (isNaN(w) || w < 10 || w > 300) newErrors.weight = 'Cân nặng phải từ 10.00 đến 300.00 kg';
+    if (isNaN(w) || w < 10 || w > 300) newErrors.weight = 'Từ 10 - 300 kg';
 
     const fat = parseFloat(subcutaneousFat);
-    if (isNaN(fat) || fat < 1 || fat > 60) newErrors.subcutaneousFat = 'Mỡ dưới da phải từ 1.0 đến 60.0%';
+    if (isNaN(fat) || fat < 1 || fat > 60) newErrors.subcutaneousFat = 'Từ 1.0 - 60.0%';
 
     const bone = parseFloat(boneCalcium);
-    if (isNaN(bone) || bone < 0.5 || bone > 10) newErrors.boneCalcium = 'Canxi xương phải từ 0.5 đến 10.0';
+    if (isNaN(bone) || bone < 0.5 || bone > 10) newErrors.boneCalcium = 'Từ 0.5 - 10.0';
 
     const water = parseFloat(bodyWater);
-    if (isNaN(water) || water < 20 || water > 80) newErrors.bodyWater = 'Lượng nước phải từ 20.0 đến 80.0%';
+    if (isNaN(water) || water < 20 || water > 80) newErrors.bodyWater = 'Từ 20.0 - 80.0%';
 
     const muscle = parseFloat(muscleMass);
-    if (isNaN(muscle) || muscle < 5 || muscle > 150) newErrors.muscleMass = 'Cơ bắp phải từ 5.00 đến 150.00 kg';
+    if (isNaN(muscle) || muscle < 5 || muscle > 150) newErrors.muscleMass = 'Từ 5 - 150 kg';
 
     const b = parseInt(bmr, 10);
-    if (isNaN(b) || b < 500 || b > 5000) newErrors.bmr = 'BMR phải từ 500 đến 5000 Kcal';
+    if (isNaN(b) || b < 500 || b > 5000) newErrors.bmr = 'Từ 500 - 5000';
 
     const bioAge = parseInt(biologicalAge, 10);
-    if (isNaN(bioAge) || bioAge < 1 || bioAge > 120) newErrors.biologicalAge = 'Tuổi sinh học từ 1 đến 120';
+    if (isNaN(bioAge) || bioAge < 1 || bioAge > 120) newErrors.biologicalAge = 'Từ 1 - 120';
 
     const visc = parseInt(visceralFat, 10);
-    if (isNaN(visc) || visc < 1 || visc > 30) newErrors.visceralFat = 'Mỡ nội tạng từ cấp 1 đến 30';
+    if (isNaN(visc) || visc < 1 || visc > 30) newErrors.visceralFat = 'Từ 1 - 30';
 
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
@@ -129,7 +177,7 @@ export const AddMetricModal: React.FC<AddMetricModalProps> = ({
         biologicalAge: bioAge,
         visceralFat: visc,
         waist: parseFloat(wst.toFixed(1)),
-        notes,
+        notes: notes.trim(),
       });
 
       onClose();
@@ -137,111 +185,138 @@ export const AddMetricModal: React.FC<AddMetricModalProps> = ({
       setErrors({
         submit:
           err?.message ||
-          'Không thể kết nối Cơ sở dữ liệu PostgreSQL để lưu chỉ số cân đo. Vui lòng thử lại!',
+          'Không thể kết nối Cơ sở dữ liệu để lưu chỉ số cân đo. Vui lòng thử lại!',
       });
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  const inputBase =
+    'w-full px-2.5 py-2 border rounded-xl focus:ring-2 focus:ring-emerald-500 outline-hidden font-bold text-slate-900 placeholder:font-normal placeholder:text-slate-400 text-sm sm:text-xs tabular-nums';
+
   return (
-    <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full min-w-0 p-4 sm:p-6 my-2 sm:my-8 max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] overflow-y-auto overflow-x-hidden animate-in fade-in zoom-in-95 duration-150 border border-slate-100">
-        {/* Header */}
-        <div className="flex items-start sm:items-center justify-between gap-2 pb-3 sm:pb-4 border-b border-slate-100">
-          <div className="flex items-center space-x-2.5 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
-              <Scale className="w-5 h-5" />
+    <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-2.5 sm:p-4 overflow-y-auto">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full min-w-0 p-3.5 sm:p-5 my-2 sm:my-6 max-h-[calc(100dvh-1rem)] overflow-y-auto overflow-x-hidden animate-in fade-in zoom-in-95 duration-150 border border-slate-100">
+        {/* Compact Header */}
+        <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
+          <div className="flex items-center space-x-2 min-w-0">
+            <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+              <Scale className="w-4 h-4" />
             </div>
             <div className="min-w-0">
-              <h3 className="font-bold text-slate-900 text-sm sm:text-base break-words">
-                Nhập Nhật Ký 10 Chỉ Số Sinh Học
+              <h3 className="font-extrabold text-slate-900 text-sm truncate">
+                Nhập Chỉ Số · {student.fullName}
               </h3>
-              <p className="text-xs text-slate-500 break-words">
-                Học viên: <span className="font-semibold text-slate-800">{student.fullName}</span> ({student.age} tuổi)
+              <p className="text-[11px] text-slate-500 truncate">
+                Nhập liền tự tách thập phân (vd: <span className="font-mono font-semibold text-slate-700">347→34.7</span>,{' '}
+                <span className="font-mono font-semibold text-slate-700">28→2.8</span>)
               </p>
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 shrink-0"
+            className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 shrink-0 cursor-pointer"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Live Score Preview & Instant Anomaly Warning Banner */}
-        <div className="mt-4 p-3 rounded-xl bg-emerald-50/70 border border-emerald-200/80 flex flex-wrap items-center justify-between gap-2 text-xs">
-          <div className="flex flex-wrap items-center gap-1.5 min-w-0">
-            <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span className="font-semibold text-emerald-900">Điểm Sức Khỏe Dự Kiến:</span>
-            <span className="text-xs sm:text-sm font-extrabold text-emerald-700 bg-white px-2 py-0.5 rounded-md border border-emerald-300">
-              {scorePreview.totalScore} / 100 ({scorePreview.tier})
-            </span>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-1.5">
-            {tempMetric.visceralFat >= 10 && (
-              <span className="inline-flex items-center text-rose-700 font-bold bg-rose-100 px-2 py-0.5 rounded border border-rose-300">
-                <AlertTriangle className="w-3.5 h-3.5 mr-1 shrink-0" />
-                Mỡ nội tạng ≥ 10
-              </span>
-            )}
-            {tempMetric.biologicalAge - student.age >= 3 && (
-              <span className="inline-flex items-center text-amber-800 font-bold bg-amber-100 px-2 py-0.5 rounded border border-amber-300">
-                <AlertTriangle className="w-3.5 h-3.5 mr-1 shrink-0" />
-                Lão hóa +{tempMetric.biologicalAge - student.age} tuổi
-              </span>
-            )}
-          </div>
-        </div>
-
         {/* Form Body */}
-        <form onSubmit={handleSubmit} className="mt-4 space-y-4 text-xs">
-          {/* Measurement Date */}
-          <div>
-            <label className="block font-semibold text-slate-700 mb-1">Ngày cân đo *</label>
-            <input
-              type="date"
-              required
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-hidden font-medium"
-            />
+        <form onSubmit={handleSubmit} className="mt-3 space-y-3 text-xs">
+          {/* Date + Live Score Pill in 1 slim row */}
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              <label className="font-bold text-slate-600 whitespace-nowrap">Ngày đo</label>
+              <input
+                type="date"
+                required
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                className="flex-1 min-w-0 px-2.5 py-1.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-hidden font-bold text-slate-800 text-xs"
+              />
+            </div>
+
+            {scorePreview && (
+              <div className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 font-extrabold text-[11px] shrink-0">
+                <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                <span>{scorePreview.totalScore}/100</span>
+              </div>
+            )}
           </div>
 
-          {/* 10 Indicators Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-            {/* 1. Cân nặng */}
+          {/* Inline Warning Chips (only when triggered) */}
+          {((visceralFat && tempMetric.visceralFat >= 10) ||
+            (biologicalAge && tempMetric.biologicalAge - student.age >= 3)) && (
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+              {visceralFat && tempMetric.visceralFat >= 10 && (
+                <span className="inline-flex items-center text-rose-700 font-bold bg-rose-50 px-2 py-0.5 rounded-lg border border-rose-200">
+                  <AlertTriangle className="w-3 h-3 mr-1 shrink-0" />
+                  Mỡ nội tạng ≥ 10
+                </span>
+              )}
+              {biologicalAge && tempMetric.biologicalAge - student.age >= 3 && (
+                <span className="inline-flex items-center text-amber-800 font-bold bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200">
+                  <AlertTriangle className="w-3 h-3 mr-1 shrink-0" />
+                  Lão hóa +{tempMetric.biologicalAge - student.age} tuổi
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Compact 2-column Grid (works cleanly on mobile & desktop) */}
+          <div className="grid grid-cols-2 gap-2.5">
+            {/* Cân nặng */}
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">
-                1. Cân nặng (kg) * <span className="text-slate-400 font-normal">[10 - 300]</span>
+              <label className="block font-bold text-slate-700 mb-1 text-[11px]">
+                Cân nặng (kg)
               </label>
               <input
-                type="number"
-                step="0.01"
+                type="text"
+                inputMode="decimal"
+                autoFocus
                 required
+                placeholder={latestMetric ? `Trước: ${latestMetric.weight}` : 'vd: 62.5'}
                 value={weight}
-                onChange={(e) => setWeight(e.target.value)}
-                className={`w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-emerald-500 outline-hidden font-medium ${
+                onChange={(e) => {
+                  clearFieldError('weight');
+                  setWeight(
+                    formatSmartDecimal(e.target.value, weight, {
+                      intDigits: 2,
+                      maxDecimals: 2,
+                      minAutoSplit: 200,
+                    })
+                  );
+                }}
+                className={`${inputBase} ${
                   errors.weight ? 'border-rose-400 bg-rose-50' : 'border-slate-200'
                 }`}
               />
               {errors.weight && <p className="text-rose-500 text-[10px] mt-0.5">{errors.weight}</p>}
             </div>
 
-            {/* 2. Mỡ dưới da */}
+            {/* Mỡ dưới da */}
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">
-                2. Mỡ dưới da (%) * <span className="text-slate-400 font-normal">[1.0 - 60.0]</span>
+              <label className="block font-bold text-slate-700 mb-1 text-[11px]">
+                Mỡ dưới da (%)
               </label>
               <input
-                type="number"
-                step="0.1"
+                type="text"
+                inputMode="decimal"
                 required
+                placeholder={latestMetric ? `Trước: ${latestMetric.subcutaneousFat}` : 'vd: 24.5'}
                 value={subcutaneousFat}
-                onChange={(e) => setSubcutaneousFat(e.target.value)}
-                className={`w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-emerald-500 outline-hidden font-medium ${
+                onChange={(e) => {
+                  clearFieldError('subcutaneousFat');
+                  setSubcutaneousFat(
+                    formatSmartDecimal(e.target.value, subcutaneousFat, {
+                      intDigits: 2,
+                      maxDecimals: 1,
+                    })
+                  );
+                }}
+                className={`${inputBase} ${
                   errors.subcutaneousFat ? 'border-rose-400 bg-rose-50' : 'border-slate-200'
                 }`}
               />
@@ -250,18 +325,28 @@ export const AddMetricModal: React.FC<AddMetricModalProps> = ({
               )}
             </div>
 
-            {/* 3. Canxi xương */}
+            {/* Canxi xương */}
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">
-                3. Canxi xương (Chỉ số) * <span className="text-slate-400 font-normal">[0.5 - 10.0]</span>
+              <label className="block font-bold text-slate-700 mb-1 text-[11px]">
+                Canxi xương
               </label>
               <input
-                type="number"
-                step="0.1"
+                type="text"
+                inputMode="decimal"
                 required
+                placeholder={latestMetric ? `Trước: ${latestMetric.boneCalcium}` : 'vd: 2.8'}
                 value={boneCalcium}
-                onChange={(e) => setBoneCalcium(e.target.value)}
-                className={`w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-emerald-500 outline-hidden font-medium ${
+                onChange={(e) => {
+                  clearFieldError('boneCalcium');
+                  setBoneCalcium(
+                    formatSmartDecimal(e.target.value, boneCalcium, {
+                      intDigits: 1,
+                      maxDecimals: 1,
+                      allowExactTen: true,
+                    })
+                  );
+                }}
+                className={`${inputBase} ${
                   errors.boneCalcium ? 'border-rose-400 bg-rose-50' : 'border-slate-200'
                 }`}
               />
@@ -270,18 +355,27 @@ export const AddMetricModal: React.FC<AddMetricModalProps> = ({
               )}
             </div>
 
-            {/* 4. Lượng nước */}
+            {/* Lượng nước */}
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">
-                4. Lượng nước (%) * <span className="text-slate-400 font-normal">[20.0 - 80.0]</span>
+              <label className="block font-bold text-slate-700 mb-1 text-[11px]">
+                Lượng nước (%)
               </label>
               <input
-                type="number"
-                step="0.1"
+                type="text"
+                inputMode="decimal"
                 required
+                placeholder={latestMetric ? `Trước: ${latestMetric.bodyWater}` : 'vd: 55.2'}
                 value={bodyWater}
-                onChange={(e) => setBodyWater(e.target.value)}
-                className={`w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-emerald-500 outline-hidden font-medium ${
+                onChange={(e) => {
+                  clearFieldError('bodyWater');
+                  setBodyWater(
+                    formatSmartDecimal(e.target.value, bodyWater, {
+                      intDigits: 2,
+                      maxDecimals: 1,
+                    })
+                  );
+                }}
+                className={`${inputBase} ${
                   errors.bodyWater ? 'border-rose-400 bg-rose-50' : 'border-slate-200'
                 }`}
               />
@@ -290,18 +384,27 @@ export const AddMetricModal: React.FC<AddMetricModalProps> = ({
               )}
             </div>
 
-            {/* 5. Trọng lượng cơ bắp */}
+            {/* Trọng lượng cơ bắp */}
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">
-                5. Trọng lượng cơ bắp (kg) * <span className="text-slate-400 font-normal">[5 - 150]</span>
+              <label className="block font-bold text-slate-700 mb-1 text-[11px]">
+                Cơ bắp (kg)
               </label>
               <input
-                type="number"
-                step="0.01"
+                type="text"
+                inputMode="decimal"
                 required
+                placeholder={latestMetric ? `Trước: ${latestMetric.muscleMass}` : 'vd: 32.5'}
                 value={muscleMass}
-                onChange={(e) => setMuscleMass(e.target.value)}
-                className={`w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-emerald-500 outline-hidden font-medium ${
+                onChange={(e) => {
+                  clearFieldError('muscleMass');
+                  setMuscleMass(
+                    formatSmartDecimal(e.target.value, muscleMass, {
+                      intDigits: 2,
+                      maxDecimals: 2,
+                    })
+                  );
+                }}
+                className={`${inputBase} ${
                   errors.muscleMass ? 'border-rose-400 bg-rose-50' : 'border-slate-200'
                 }`}
               />
@@ -310,34 +413,46 @@ export const AddMetricModal: React.FC<AddMetricModalProps> = ({
               )}
             </div>
 
-            {/* 7. BMR */}
+            {/* BMR */}
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">
-                6. Năng lượng nghỉ ngơi BMR (Kcal) * <span className="text-slate-400 font-normal">[500 - 5000]</span>
+              <label className="block font-bold text-slate-700 mb-1 text-[11px]">
+                BMR (Kcal)
               </label>
               <input
-                type="number"
+                type="text"
+                inputMode="numeric"
                 required
+                placeholder={latestMetric ? `Trước: ${latestMetric.bmr}` : 'vd: 1450'}
                 value={bmr}
-                onChange={(e) => setBmr(e.target.value)}
-                className={`w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-emerald-500 outline-hidden font-medium ${
+                onChange={(e) => {
+                  clearFieldError('bmr');
+                  setBmr(formatIntegerOnly(e.target.value, 4));
+                }}
+                className={`${inputBase} ${
                   errors.bmr ? 'border-rose-400 bg-rose-50' : 'border-slate-200'
                 }`}
               />
               {errors.bmr && <p className="text-rose-500 text-[10px] mt-0.5">{errors.bmr}</p>}
             </div>
 
-            {/* 8. Tuổi sinh học */}
+            {/* Tuổi sinh học */}
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">
-                7. Tuổi sinh học (Tuổi) * <span className="text-slate-400 font-normal">[1 - 120]</span>
+              <label className="block font-bold text-slate-700 mb-1 text-[11px]">
+                Tuổi sinh học
               </label>
               <input
-                type="number"
+                type="text"
+                inputMode="numeric"
                 required
+                placeholder={
+                  latestMetric ? `Trước: ${latestMetric.biologicalAge}` : `Tuổi thật: ${student.age}`
+                }
                 value={biologicalAge}
-                onChange={(e) => setBiologicalAge(e.target.value)}
-                className={`w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-emerald-500 outline-hidden font-medium ${
+                onChange={(e) => {
+                  clearFieldError('biologicalAge');
+                  setBiologicalAge(formatIntegerOnly(e.target.value, 3));
+                }}
+                className={`${inputBase} ${
                   errors.biologicalAge ? 'border-rose-400 bg-rose-50' : 'border-slate-200'
                 }`}
               />
@@ -346,17 +461,22 @@ export const AddMetricModal: React.FC<AddMetricModalProps> = ({
               )}
             </div>
 
-            {/* 9. Mỡ nội tạng */}
+            {/* Mỡ nội tạng */}
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">
-                8. Mỡ nội tạng (Cấp) * <span className="text-slate-400 font-normal">[Cấp 1 - 30]</span>
+              <label className="block font-bold text-slate-700 mb-1 text-[11px]">
+                Mỡ nội tạng (Cấp)
               </label>
               <input
-                type="number"
+                type="text"
+                inputMode="numeric"
                 required
+                placeholder={latestMetric ? `Trước: ${latestMetric.visceralFat}` : 'vd: 6'}
                 value={visceralFat}
-                onChange={(e) => setVisceralFat(e.target.value)}
-                className={`w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-emerald-500 outline-hidden font-medium ${
+                onChange={(e) => {
+                  clearFieldError('visceralFat');
+                  setVisceralFat(formatIntegerOnly(e.target.value, 2));
+                }}
+                className={`${inputBase} ${
                   errors.visceralFat ? 'border-rose-400 bg-rose-50' : 'border-slate-200'
                 }`}
               />
@@ -366,48 +486,37 @@ export const AddMetricModal: React.FC<AddMetricModalProps> = ({
             </div>
           </div>
 
-          {/* Notes */}
-          <div>
-            <label className="block font-semibold text-slate-700 mb-1">
-              Ghi chú của Huấn luyện viên
-            </label>
-            <textarea
-              rows={2}
-              placeholder="Ghi nhận tình trạng thể lực, cảm giác cơ bắp, mức năng lượng..."
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-hidden"
-            />
-          </div>
+          {/* Compact 1-line Notes */}
+          <input
+            type="text"
+            placeholder="Ghi chú nhanh (không bắt buộc)..."
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-hidden text-xs"
+          />
 
           {errors.submit && (
-            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
+            <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
               {errors.submit}
             </div>
           )}
 
-          {/* Actions */}
-          <div className="pt-3 border-t border-slate-100 flex flex-col-reverse sm:flex-row sm:items-center justify-between gap-3">
-            <span className="text-[11px] text-slate-400 flex items-start sm:items-center min-w-0">
-              <Info className="w-3.5 h-3.5 mr-1 shrink-0 mt-0.5 sm:mt-0" />
-              <span>Lưu trực tiếp vào PostgreSQL Database &amp; tạo dự thảo Lời khuyên AI</span>
-            </span>
-            <div className="flex items-center justify-end gap-2 w-full sm:w-auto shrink-0">
-              <button
-                type="button"
-                onClick={onClose}
-                className="flex-1 sm:flex-initial px-4 py-2 border border-slate-200 rounded-xl font-semibold text-slate-600 hover:bg-slate-50 transition-colors cursor-pointer"
-              >
-                Hủy
-              </button>
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="flex-1 sm:flex-initial px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-semibold transition-colors shadow-xs whitespace-nowrap cursor-pointer disabled:opacity-50"
-              >
-                {isSubmitting ? 'Đang lưu vào DB...' : 'Lưu Nhật Ký Đo'}
-              </button>
-            </div>
+          {/* Compact Actions */}
+          <div className="pt-2 border-t border-slate-100 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 py-2.5 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50 transition-colors cursor-pointer"
+            >
+              Hủy
+            </button>
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="flex-[2] py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold transition-colors shadow-xs cursor-pointer disabled:opacity-50"
+            >
+              {isSubmitting ? 'Đang lưu...' : 'Lưu Chỉ Số'}
+            </button>
           </div>
         </form>
       </div>

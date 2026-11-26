@@ -27,6 +27,7 @@ import {
   Printer,
   Bell,
   ChevronRight,
+  ChevronDown,
   Apple,
   ShieldAlert,
   Activity,
@@ -49,6 +50,22 @@ export const StudentPortal: React.FC<StudentPortalProps> = ({ student }) => {
   } = useHealth();
 
   const [activeTab, setActiveTab] = useState<'overview' | 'nutrition' | 'metrics'>('overview');
+  const [isAdviceOpen, setIsAdviceOpen] = useState(false);
+  const [openAdviceParts, setOpenAdviceParts] = useState<{
+    part1: boolean;
+    part2: boolean;
+    part3: boolean;
+  }>({ part1: false, part2: false, part3: false });
+
+  const toggleAdvicePart = (part: 'part1' | 'part2' | 'part3') => {
+    setOpenAdviceParts((prev) => ({ ...prev, [part]: !prev[part] }));
+  };
+
+  const allPartsOpen = openAdviceParts.part1 && openAdviceParts.part2 && openAdviceParts.part3;
+  const toggleAllAdviceParts = () => {
+    const next = !allPartsOpen;
+    setOpenAdviceParts({ part1: next, part2: next, part3: next });
+  };
 
   const studentMetrics = getStudentMetrics(student.id);
   const studentAdvices = getStudentAdvices(student.id);
@@ -487,190 +504,7 @@ export const StudentPortal: React.FC<StudentPortalProps> = ({ student }) => {
             </div>
           </div>
 
-          {/* Instant AI Advice & Medical Analysis (3-Part Structured Clinical Template) */}
-          {latestAdvice ? (
-            <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-white rounded-2xl sm:rounded-3xl p-4 sm:p-6 border-2 border-emerald-300 shadow-xs space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-emerald-200">
-                <div className="flex items-center space-x-2">
-                  <Sparkles className="w-5 h-5 text-emerald-600 shrink-0" />
-                  <h3 className="font-extrabold text-slate-900 text-sm sm:text-base">
-                    Lời Khuyên & Phân Tích Sức Khỏe AI Tự Động (3 Phần Chuẩn Y Tế)
-                  </h3>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    onClick={() => setOpenStandardsModal(true)}
-                    className="text-xs font-bold text-emerald-800 bg-white hover:bg-emerald-100/60 px-3 py-1 rounded-full border border-emerald-300 transition-colors cursor-pointer"
-                  >
-                    Xem Bảng Chỉ Số Cơ Thể
-                  </button>
-                  <span className="text-xs font-bold text-emerald-800 bg-emerald-100 px-3 py-1 rounded-full">
-                    Kỳ đo: {latestAdvice.date}
-                  </span>
-                </div>
-              </div>
-
-              {/* PHẦN 1: CHỈ SỐ CẢNH BÁO */}
-              <div className="p-4 rounded-2xl bg-white border border-red-200 shadow-2xs space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-1.5 font-black text-red-950 text-xs uppercase tracking-wide">
-                    <ShieldAlert className="w-4 h-4 text-red-600" />
-                    <span>Phần 1: Chỉ Số Cảnh Báo & Rủi Ro Bệnh Lý</span>
-                  </div>
-                  <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">
-                    Đối soát Bảng chỉ số cơ thể
-                  </span>
-                </div>
-
-                {Array.isArray(latestAdvice.aiDraftContent.warningMetrics) &&
-                latestAdvice.aiDraftContent.warningMetrics.length > 0 ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
-                    {latestAdvice.aiDraftContent.warningMetrics.map((wm, wIdx) => {
-                      const isDanger = wm.level === 'danger';
-                      const isWarning = wm.level === 'warning';
-                      return (
-                        <div
-                          key={wIdx}
-                          className={`p-2.5 rounded-xl border ${
-                            isDanger
-                              ? 'bg-red-50/50 border-red-200'
-                              : isWarning
-                              ? 'bg-amber-50/50 border-amber-200'
-                              : 'bg-emerald-50/50 border-emerald-200'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-1 mb-1">
-                            <span className="font-extrabold text-slate-900 text-[11px]">{wm.name}</span>
-                            <span
-                              className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full ${
-                                isDanger
-                                  ? 'bg-red-100 text-red-800'
-                                  : isWarning
-                                  ? 'bg-amber-100 text-amber-800'
-                                  : 'bg-emerald-100 text-emerald-800'
-                              }`}
-                            >
-                              {isDanger ? 'Nguy hiểm' : isWarning ? 'Cảnh báo' : 'An toàn'}
-                            </span>
-                          </div>
-                          <div className="text-[11px] text-slate-600 mb-1">
-                            Giá trị: <strong className="text-slate-900">{wm.value}</strong> • Chuẩn: {wm.standard}
-                          </div>
-                          <div className="text-[10.5px] text-slate-700 leading-snug font-medium">
-                            ⚠️ {wm.risk}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <p className="text-xs text-slate-800 font-medium">
-                    {latestAdvice.trainerEditedContent || latestAdvice.aiDraftContent.summary}
-                  </p>
-                )}
-              </div>
-
-              {/* PHẦN 2: ĐÁNH GIÁ CHUYÊN SÂU */}
-              <div className="p-4 rounded-2xl bg-white border border-indigo-200 shadow-2xs space-y-2.5">
-                <div className="flex items-center space-x-1.5 font-black text-indigo-950 text-xs uppercase tracking-wide">
-                  <Activity className="w-4 h-4 text-indigo-600" />
-                  <span>Phần 2: Đánh Giá Chuyên Sâu</span>
-                </div>
-
-                {latestAdvice.aiDraftContent.deepAssessment ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-xs">
-                    <div className="p-3 bg-indigo-50/40 rounded-xl border border-indigo-100 space-y-1">
-                      <div className="font-bold text-indigo-950 text-[11px]">Tổng quan thể trạng:</div>
-                      <p className="text-slate-700 font-medium leading-relaxed">
-                        {latestAdvice.aiDraftContent.deepAssessment.overview}
-                      </p>
-                    </div>
-
-                    <div className="p-3 bg-indigo-50/40 rounded-xl border border-indigo-100 space-y-1">
-                      <div className="font-bold text-indigo-950 text-[11px]">Ma trận Cơ - Mỡ - Nước - Xương:</div>
-                      <p className="text-slate-700 font-medium leading-relaxed">
-                        {latestAdvice.aiDraftContent.deepAssessment.bodyCompositionAnalysis}
-                      </p>
-                    </div>
-
-                    <div className="p-3 bg-indigo-50/40 rounded-xl border border-indigo-100 space-y-1">
-                      <div className="font-bold text-indigo-950 text-[11px]">Mỡ nội tạng & Lão hóa sinh học:</div>
-                      <p className="text-slate-700 font-medium leading-relaxed">
-                        {latestAdvice.aiDraftContent.deepAssessment.visceralAndAgingRisk}
-                      </p>
-                    </div>
-
-                    <div className="p-3 bg-indigo-50/40 rounded-xl border border-indigo-100 space-y-1">
-                      <div className="font-bold text-indigo-950 text-[11px]">So sánh tiến trình biến động:</div>
-                      <p className="text-slate-700 font-medium leading-relaxed">
-                        {latestAdvice.aiDraftContent.deepAssessment.progressComparison || 'Lần đo đầu tiên - mốc đối chiếu cơ sở.'}
-                      </p>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-xs text-slate-800 font-medium">
-                    {latestAdvice.aiDraftContent.summary}
-                  </p>
-                )}
-              </div>
-
-              {/* PHẦN 3: KHUYẾN NGHỊ HÀNH ĐỘNG CỤ THỂ */}
-              <div className="p-4 rounded-2xl bg-white border border-emerald-200 shadow-2xs space-y-2.5">
-                <div className="flex items-center space-x-1.5 font-black text-emerald-950 text-xs uppercase tracking-wide">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                  <span>Phần 3: Khuyến Nghị Hành Động Cụ Thể</span>
-                </div>
-
-                {Array.isArray(latestAdvice.aiDraftContent.actionRecommendations) &&
-                latestAdvice.aiDraftContent.actionRecommendations.length > 0 ? (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 text-xs">
-                    {latestAdvice.aiDraftContent.actionRecommendations.map((act, actIdx) => (
-                      <div key={actIdx} className="p-3 bg-emerald-50/40 rounded-xl border border-emerald-100 space-y-1.5">
-                        <div className="font-extrabold text-slate-900 text-[11px] flex items-center space-x-1">
-                          {act.area === 'Dinh dưỡng' ? (
-                            <Apple className="w-3.5 h-3.5 text-emerald-600" />
-                          ) : act.area === 'Tập luyện' ? (
-                            <Dumbbell className="w-3.5 h-3.5 text-indigo-600" />
-                          ) : (
-                            <Droplet className="w-3.5 h-3.5 text-cyan-600" />
-                          )}
-                          <span>{act.area}</span>
-                        </div>
-                        <p className="text-slate-700 leading-snug font-medium text-[11px]">{act.action}</p>
-                        <div className="p-1.5 bg-white rounded-lg border border-emerald-200/80 text-[10.5px]">
-                          <strong className="text-emerald-900">{act.target}</strong>
-                        </div>
-                        {act.notes && (
-                          <div className="text-[10px] text-slate-500 italic">* {act.notes}</div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                    <div className="p-3 bg-emerald-50/40 rounded-xl border border-emerald-100">
-                      <div className="font-bold text-slate-900 mb-1">Dinh dưỡng khuyến nghị:</div>
-                      <p className="text-slate-600">{latestAdvice.aiDraftContent.nutritionAdvice}</p>
-                    </div>
-                    <div className="p-3 bg-emerald-50/40 rounded-xl border border-emerald-100">
-                      <div className="font-bold text-slate-900 mb-1">Kế hoạch tập luyện:</div>
-                      <p className="text-slate-600">{latestAdvice.aiDraftContent.workoutAdvice}</p>
-                    </div>
-                  </div>
-                )}
-
-                <div className="p-2.5 bg-emerald-100/60 rounded-xl text-[11px] text-emerald-950 font-medium">
-                  💧 <strong>Lối sống & Uống nước:</strong> {latestAdvice.aiDraftContent.lifestyleTip}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="p-6 bg-slate-50 rounded-3xl border border-slate-200 text-center text-xs text-slate-500">
-              Chưa có dữ liệu lời khuyên. Khi HLV cập nhật lần cân đo mới, AI sẽ phân tích tức thì!
-            </div>
-          )}
-
-          {/* Quick Metrics History Preview */}
+          {/* 1. Quick Metrics History Preview (Moved above Advice & Analysis) */}
           <div className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-slate-200/90 shadow-xs">
             <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100 mb-3">
               <h3 className="font-bold text-slate-900 text-sm">
@@ -732,6 +566,290 @@ export const StudentPortal: React.FC<StudentPortalProps> = ({ student }) => {
               <p className="text-xs text-slate-400 text-center py-4">Chưa có dữ liệu cân đo</p>
             )}
           </div>
+
+          {/* 2. Collapsible AI Advice & Medical Analysis (3-Part Accordion) */}
+          {latestAdvice ? (
+            (() => {
+              const warningList = Array.isArray(latestAdvice.aiDraftContent.warningMetrics)
+                ? latestAdvice.aiDraftContent.warningMetrics
+                : [];
+              const alertCount = warningList.filter(
+                (w) => w.level === 'danger' || w.level === 'warning'
+              ).length;
+
+              return (
+                <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-white rounded-2xl sm:rounded-3xl p-4 sm:p-5 border-2 border-emerald-300 shadow-xs space-y-3">
+                  {/* Collapsible Master Header */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setIsAdviceOpen((prev) => !prev)}
+                      className="flex items-center justify-between sm:justify-start gap-2 text-left cursor-pointer group flex-1 min-w-0"
+                    >
+                      <div className="flex items-center space-x-2 min-w-0">
+                        <Sparkles className="w-5 h-5 text-emerald-600 shrink-0" />
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <h3 className="font-extrabold text-slate-900 text-sm sm:text-base">
+                              Lời Khuyên &amp; Phân Tích Sức Khỏe
+                            </h3>
+                            <span className="text-[11px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full">
+                              Kỳ đo: {latestAdvice.date}
+                            </span>
+                            {alertCount > 0 && (
+                              <span className="text-[10px] font-extrabold text-rose-700 bg-rose-100 border border-rose-200 px-2 py-0.5 rounded-full">
+                                {alertCount} cảnh báo
+                              </span>
+                            )}
+                          </div>
+                          {!isAdviceOpen && (
+                            <p className="text-[11px] text-slate-500 mt-0.5">
+                              Bấm để mở xem chi tiết 3 phần: Cảnh báo, Đánh giá chuyên sâu &amp; Khuyến nghị
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-white border border-emerald-300 text-emerald-800 text-xs font-bold shrink-0 group-hover:bg-emerald-50 transition-colors">
+                        <span>{isAdviceOpen ? 'Thu gọn' : 'Mở xem'}</span>
+                        <ChevronDown
+                          className={`w-4 h-4 transition-transform duration-200 ${
+                            isAdviceOpen ? 'rotate-180' : ''
+                          }`}
+                        />
+                      </span>
+                    </button>
+                  </div>
+
+                  {isAdviceOpen && (
+                    <div className="pt-3 border-t border-emerald-200 space-y-2.5">
+                      {/* Quick utility bar */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <button
+                          type="button"
+                          onClick={toggleAllAdviceParts}
+                          className="text-[11px] font-bold text-emerald-800 hover:text-emerald-950 underline cursor-pointer"
+                        >
+                          {allPartsOpen ? 'Thu gọn tất cả 3 phần' : 'Mở tất cả 3 phần'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setOpenStandardsModal(true)}
+                          className="text-[11px] font-bold text-emerald-800 bg-white hover:bg-emerald-100/60 px-3 py-1 rounded-full border border-emerald-300 transition-colors cursor-pointer"
+                        >
+                          Xem Bảng Chỉ Số Cơ Thể
+                        </button>
+                      </div>
+
+                      {/* PHẦN 1: CHỈ SỐ CẢNH BÁO */}
+                      <div className="rounded-2xl bg-white border border-red-200 shadow-2xs overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => toggleAdvicePart('part1')}
+                          className="w-full p-3.5 flex items-center justify-between gap-2 text-left hover:bg-red-50/40 transition-colors cursor-pointer"
+                        >
+                          <div className="flex items-center space-x-1.5 font-black text-red-950 text-xs uppercase tracking-wide min-w-0">
+                            <ShieldAlert className="w-4 h-4 text-red-600 shrink-0" />
+                            <span className="truncate">Phần 1: Chỉ Số Cảnh Báo &amp; Rủi Ro Bệnh Lý</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {warningList.length > 0 && (
+                              <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">
+                                {warningList.length} mục
+                              </span>
+                            )}
+                            <ChevronDown
+                              className={`w-4 h-4 text-red-600 transition-transform duration-200 ${
+                                openAdviceParts.part1 ? 'rotate-180' : ''
+                              }`}
+                            />
+                          </div>
+                        </button>
+
+                        {openAdviceParts.part1 && (
+                          <div className="px-3.5 pb-3.5 pt-1 border-t border-red-100">
+                            {warningList.length > 0 ? (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                                {warningList.map((wm, wIdx) => {
+                                  const isDanger = wm.level === 'danger';
+                                  const isWarning = wm.level === 'warning';
+                                  return (
+                                    <div
+                                      key={wIdx}
+                                      className={`p-2.5 rounded-xl border ${
+                                        isDanger
+                                          ? 'bg-red-50/50 border-red-200'
+                                          : isWarning
+                                          ? 'bg-amber-50/50 border-amber-200'
+                                          : 'bg-emerald-50/50 border-emerald-200'
+                                      }`}
+                                    >
+                                      <div className="flex items-center justify-between gap-1 mb-1">
+                                        <span className="font-extrabold text-slate-900 text-[11px]">{wm.name}</span>
+                                        <span
+                                          className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full ${
+                                            isDanger
+                                              ? 'bg-red-100 text-red-800'
+                                              : isWarning
+                                              ? 'bg-amber-100 text-amber-800'
+                                              : 'bg-emerald-100 text-emerald-800'
+                                          }`}
+                                        >
+                                          {isDanger ? 'Nguy hiểm' : isWarning ? 'Cảnh báo' : 'An toàn'}
+                                        </span>
+                                      </div>
+                                      <div className="text-[11px] text-slate-600 mb-1">
+                                        Giá trị: <strong className="text-slate-900">{wm.value}</strong> • Chuẩn: {wm.standard}
+                                      </div>
+                                      <div className="text-[10.5px] text-slate-700 leading-snug font-medium">
+                                        ⚠️ {wm.risk}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <p className="text-xs text-slate-800 font-medium">
+                                {latestAdvice.trainerEditedContent || latestAdvice.aiDraftContent.summary}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* PHẦN 2: ĐÁNH GIÁ CHUYÊN SÂU */}
+                      <div className="rounded-2xl bg-white border border-indigo-200 shadow-2xs overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => toggleAdvicePart('part2')}
+                          className="w-full p-3.5 flex items-center justify-between gap-2 text-left hover:bg-indigo-50/40 transition-colors cursor-pointer"
+                        >
+                          <div className="flex items-center space-x-1.5 font-black text-indigo-950 text-xs uppercase tracking-wide min-w-0">
+                            <Activity className="w-4 h-4 text-indigo-600 shrink-0" />
+                            <span className="truncate">Phần 2: Đánh Giá Chuyên Sâu</span>
+                          </div>
+                          <ChevronDown
+                            className={`w-4 h-4 text-indigo-600 shrink-0 transition-transform duration-200 ${
+                              openAdviceParts.part2 ? 'rotate-180' : ''
+                            }`}
+                          />
+                        </button>
+
+                        {openAdviceParts.part2 && (
+                          <div className="px-3.5 pb-3.5 pt-1 border-t border-indigo-100">
+                            {latestAdvice.aiDraftContent.deepAssessment ? (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-xs">
+                                <div className="p-3 bg-indigo-50/40 rounded-xl border border-indigo-100 space-y-1">
+                                  <div className="font-bold text-indigo-950 text-[11px]">Tổng quan thể trạng:</div>
+                                  <p className="text-slate-700 font-medium leading-relaxed">
+                                    {latestAdvice.aiDraftContent.deepAssessment.overview}
+                                  </p>
+                                </div>
+
+                                <div className="p-3 bg-indigo-50/40 rounded-xl border border-indigo-100 space-y-1">
+                                  <div className="font-bold text-indigo-950 text-[11px]">Ma trận Cơ - Mỡ - Nước - Xương:</div>
+                                  <p className="text-slate-700 font-medium leading-relaxed">
+                                    {latestAdvice.aiDraftContent.deepAssessment.bodyCompositionAnalysis}
+                                  </p>
+                                </div>
+
+                                <div className="p-3 bg-indigo-50/40 rounded-xl border border-indigo-100 space-y-1">
+                                  <div className="font-bold text-indigo-950 text-[11px]">Mỡ nội tạng &amp; Lão hóa sinh học:</div>
+                                  <p className="text-slate-700 font-medium leading-relaxed">
+                                    {latestAdvice.aiDraftContent.deepAssessment.visceralAndAgingRisk}
+                                  </p>
+                                </div>
+
+                                <div className="p-3 bg-indigo-50/40 rounded-xl border border-indigo-100 space-y-1">
+                                  <div className="font-bold text-indigo-950 text-[11px]">So sánh tiến trình biến động:</div>
+                                  <p className="text-slate-700 font-medium leading-relaxed">
+                                    {latestAdvice.aiDraftContent.deepAssessment.progressComparison || 'Lần đo đầu tiên - mốc đối chiếu cơ sở.'}
+                                  </p>
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="text-xs text-slate-800 font-medium">
+                                {latestAdvice.aiDraftContent.summary}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* PHẦN 3: KHUYẾN NGHỊ HÀNH ĐỘNG CỤ THỂ */}
+                      <div className="rounded-2xl bg-white border border-emerald-200 shadow-2xs overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => toggleAdvicePart('part3')}
+                          className="w-full p-3.5 flex items-center justify-between gap-2 text-left hover:bg-emerald-50/40 transition-colors cursor-pointer"
+                        >
+                          <div className="flex items-center space-x-1.5 font-black text-emerald-950 text-xs uppercase tracking-wide min-w-0">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span className="truncate">Phần 3: Khuyến Nghị Hành Động Cụ Thể</span>
+                          </div>
+                          <ChevronDown
+                            className={`w-4 h-4 text-emerald-600 shrink-0 transition-transform duration-200 ${
+                              openAdviceParts.part3 ? 'rotate-180' : ''
+                            }`}
+                          />
+                        </button>
+
+                        {openAdviceParts.part3 && (
+                          <div className="px-3.5 pb-3.5 pt-1 border-t border-emerald-100 space-y-2.5">
+                            {Array.isArray(latestAdvice.aiDraftContent.actionRecommendations) &&
+                            latestAdvice.aiDraftContent.actionRecommendations.length > 0 ? (
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 text-xs">
+                                {latestAdvice.aiDraftContent.actionRecommendations.map((act, actIdx) => (
+                                  <div key={actIdx} className="p-3 bg-emerald-50/40 rounded-xl border border-emerald-100 space-y-1.5">
+                                    <div className="font-extrabold text-slate-900 text-[11px] flex items-center space-x-1">
+                                      {act.area === 'Dinh dưỡng' ? (
+                                        <Apple className="w-3.5 h-3.5 text-emerald-600" />
+                                      ) : act.area === 'Tập luyện' ? (
+                                        <Dumbbell className="w-3.5 h-3.5 text-indigo-600" />
+                                      ) : (
+                                        <Droplet className="w-3.5 h-3.5 text-cyan-600" />
+                                      )}
+                                      <span>{act.area}</span>
+                                    </div>
+                                    <p className="text-slate-700 leading-snug font-medium text-[11px]">{act.action}</p>
+                                    <div className="p-1.5 bg-white rounded-lg border border-emerald-200/80 text-[10.5px]">
+                                      <strong className="text-emerald-900">{act.target}</strong>
+                                    </div>
+                                    {act.notes && (
+                                      <div className="text-[10px] text-slate-500 italic">* {act.notes}</div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                                <div className="p-3 bg-emerald-50/40 rounded-xl border border-emerald-100">
+                                  <div className="font-bold text-slate-900 mb-1">Dinh dưỡng khuyến nghị:</div>
+                                  <p className="text-slate-600">{latestAdvice.aiDraftContent.nutritionAdvice}</p>
+                                </div>
+                                <div className="p-3 bg-emerald-50/40 rounded-xl border border-emerald-100">
+                                  <div className="font-bold text-slate-900 mb-1">Kế hoạch tập luyện:</div>
+                                  <p className="text-slate-600">{latestAdvice.aiDraftContent.workoutAdvice}</p>
+                                </div>
+                              </div>
+                            )}
+
+                            <div className="p-2.5 bg-emerald-100/60 rounded-xl text-[11px] text-emerald-950 font-medium">
+                              💧 <strong>Lối sống &amp; Uống nước:</strong> {latestAdvice.aiDraftContent.lifestyleTip}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()
+          ) : (
+            <div className="p-6 bg-slate-50 rounded-3xl border border-slate-200 text-center text-xs text-slate-500">
+              Chưa có dữ liệu lời khuyên. Khi HLV cập nhật lần cân đo mới, AI sẽ phân tích tức thì!
+            </div>
+          )}
         </div>
       )}
 

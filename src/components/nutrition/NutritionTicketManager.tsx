@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { StudentProfile, PortionStatus, MealLog } from '../../types/health';
 import { useHealth } from '../../context/HealthContext';
 import {
@@ -183,6 +183,7 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
   const [inspectCardStudent, setInspectCardStudent] = useState<StudentProfile | null>(null);
   const [dayRangeFilter, setDayRangeFilter] = useState<'COMPACT' | '1-10' | '11-20' | '21-30' | 'ALL'>('COMPACT');
+  const cardSectionRef = useRef<HTMLDivElement | null>(null);
 
   // Only students with a meal-ticket package (> 0 portions) appear in bulk meal-ticket marking
   const mealTicketStudents = useMemo(
@@ -200,14 +201,18 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
   const activeCardStudent =
     inspectCardStudent || focusedStudent || selectedStudent || mealTicketStudents[0] || students[0] || null;
 
-  // Available dates where metrics were recorded for meal-ticket students (sorted newest first)
+  // Available dates where metrics were recorded for meal-ticket students (only 3 most recent up to today)
   const metricDates = useMemo(() => {
     const set = new Set<string>();
     for (const m of metrics) {
-      if (m.date && mealTicketStudentIdSet.has(m.studentId)) set.add(m.date);
+      if (m.date && m.date <= todayIso && mealTicketStudentIdSet.has(m.studentId)) {
+        set.add(m.date);
+      }
     }
-    return Array.from(set).sort((a, b) => b.localeCompare(a));
-  }, [metrics, mealTicketStudentIdSet]);
+    return Array.from(set)
+      .sort((a, b) => b.localeCompare(a))
+      .slice(0, 3);
+  }, [metrics, mealTicketStudentIdSet, todayIso]);
 
   // Map of metrics on selectedDate
   const metricByStudentOnDate = useMemo(() => {
@@ -578,28 +583,28 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
       {/* PHẦN 1 (HLV): BẢNG ĐÁNH PHIẾU SỬ DỤNG BỮA ĂN CÙNG LÚC NHIỀU HỌC VIÊN */}
       {/* ===================================================================== */}
       {mode === 'trainer' && defaultView === 'batch' && (
-        <div className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-6 border border-slate-200/90 shadow-xs space-y-4">
+        <div className="bg-white rounded-2xl sm:rounded-3xl p-3.5 sm:p-6 border border-slate-200/90 shadow-xs space-y-3.5 sm:space-y-4">
           {/* Header & Date Selector */}
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3.5 border-b border-slate-100">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-slate-100">
             <div className="flex items-start space-x-2.5">
-              <div className="p-2.5 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white shadow-xs shrink-0">
-                <Layers className="w-5 h-5" />
+              <div className="p-2 sm:p-2.5 rounded-xl sm:rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white shadow-xs shrink-0">
+                <Layers className="w-4 h-4 sm:w-5 sm:h-5" />
               </div>
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="font-extrabold text-slate-900 text-sm sm:text-base">
-                    Đánh Phiếu Sử Dụng Bữa Ăn Cùng Lúc Nhiều Học Viên
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                  <h3 className="font-extrabold text-slate-900 text-sm sm:text-base leading-snug">
+                    Đánh Phiếu Bữa Ăn
                   </h3>
-                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                    {mealTicketStudents.length} học viên có phiếu ăn
+                  <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 whitespace-nowrap">
+                    {mealTicketStudents.length} HV có phiếu
                   </span>
                   {trainingOnlyStudentCount > 0 && (
-                    <span className="text-[11px] text-slate-400 font-medium">
+                    <span className="hidden sm:inline text-[11px] text-slate-400 font-medium">
                       (Đã ẩn {trainingOnlyStudentCount} HV chỉ tập · 0 phần ăn)
                     </span>
                   )}
                 </div>
-                <p className="text-xs text-slate-500 mt-0.5">
+                <p className="hidden sm:block text-xs text-slate-500 mt-0.5">
                   Chọn nhiều học viên để đánh phiếu đồng loạt chỉ với 1 cú nhấp chuột, hoặc bấm trực tiếp vào cột{' '}
                   <strong>Sáng / Chiều</strong> của từng học viên trên cùng một màn hình.
                 </p>
@@ -607,22 +612,24 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
             </div>
 
             {/* Date Picker */}
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center space-x-1.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs">
-                <Calendar className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                <span className="font-semibold text-slate-600">Ngày chấm phiếu:</span>
+            <div className="flex items-center gap-2 w-full lg:w-auto">
+              <div className="flex-1 lg:flex-none flex items-center justify-between sm:justify-start space-x-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 sm:px-3 py-1.5 text-xs">
+                <div className="flex items-center space-x-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span className="font-semibold text-slate-600 whitespace-nowrap">Ngày:</span>
+                </div>
                 <input
                   type="date"
                   value={selectedDate}
                   onChange={(e) => setSelectedDate(e.target.value)}
-                  className="bg-transparent font-bold text-slate-900 outline-hidden cursor-pointer"
+                  className="bg-transparent font-bold text-slate-900 outline-hidden cursor-pointer text-right sm:text-left"
                 />
               </div>
 
               <button
                 type="button"
                 onClick={() => setSelectedDate(todayIso)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                   selectedDate === todayIso
                     ? 'bg-emerald-600 text-white border-emerald-600'
                     : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
@@ -633,72 +640,86 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
             </div>
           </div>
 
-          {/* Quick recent weigh-in date chips */}
+          {/* Quick recent weigh-in date chips (3 most recent days up to today) */}
           {metricDates.length > 0 && (
-            <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
-              <span className="text-slate-400 font-semibold mr-1">Ngày có HV cân đo:</span>
-              {metricDates.slice(0, 7).map((d) => {
-                const count = metrics.filter(
-                  (m) => m.date === d && mealTicketStudentIdSet.has(m.studentId)
-                ).length;
-                const active = d === selectedDate;
-                return (
-                  <button
-                    key={d}
-                    type="button"
-                    onClick={() => setSelectedDate(d)}
-                    className={`px-2.5 py-1 rounded-lg font-bold transition-colors cursor-pointer ${
-                      active
-                        ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
-                    {d} ({count} HV)
-                  </button>
-                );
-              })}
+            <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 text-[11px]">
+              <span className="text-slate-500 font-semibold shrink-0">
+                Ngày HV cân đo (3 ngày gần nhất):
+              </span>
+              <div className="grid grid-cols-3 sm:flex sm:flex-wrap items-center gap-1.5">
+                {metricDates.map((d) => {
+                  const count = metrics.filter(
+                    (m) => m.date === d && mealTicketStudentIdSet.has(m.studentId)
+                  ).length;
+                  const active = d === selectedDate;
+                  const isToday = d === todayIso;
+                  return (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => setSelectedDate(d)}
+                      className={`px-2 sm:px-2.5 py-1.5 sm:py-1 rounded-lg font-bold transition-colors cursor-pointer text-center truncate ${
+                        active
+                          ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-transparent'
+                      }`}
+                    >
+                      {isToday ? 'Hôm nay' : formatShortDate(d)} ({count})
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           )}
 
           {/* Filter Tabs & Search Input */}
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5 pt-1">
-            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 pt-0.5">
+            <div className="grid grid-cols-3 sm:flex sm:flex-wrap items-center gap-1.5 text-[11px] sm:text-xs">
               <button
                 type="button"
                 onClick={() => setStudentFilter('ALL')}
-                className={`px-3 py-1.5 rounded-xl font-bold border transition-colors cursor-pointer flex items-center space-x-1.5 ${
+                className={`px-2 sm:px-3 py-1.5 rounded-xl font-bold border transition-colors cursor-pointer flex items-center justify-center space-x-1 truncate ${
                   studentFilter === 'ALL'
                     ? 'bg-slate-900 text-white border-slate-900'
                     : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                 }`}
               >
-                <Users className="w-3.5 h-3.5" />
-                <span>Tất cả có phiếu ăn ({mealTicketStudents.length})</span>
+                <Users className="w-3.5 h-3.5 hidden sm:inline shrink-0" />
+                <span className="truncate">
+                  <span className="sm:hidden">Tất cả ({mealTicketStudents.length})</span>
+                  <span className="hidden sm:inline">Tất cả có phiếu ăn ({mealTicketStudents.length})</span>
+                </span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setStudentFilter('WEIGHED_ON_DATE')}
-                className={`px-3 py-1.5 rounded-xl font-bold border transition-colors cursor-pointer flex items-center space-x-1.5 ${
+                className={`px-2 sm:px-3 py-1.5 rounded-xl font-bold border transition-colors cursor-pointer flex items-center justify-center space-x-1 truncate ${
                   studentFilter === 'WEIGHED_ON_DATE'
                     ? 'bg-emerald-600 text-white border-emerald-600'
                     : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                 }`}
               >
-                <Scale className="w-3.5 h-3.5" />
-                <span>Có cân chỉ số ngày {formatShortDate(selectedDate)} ({weighedCountOnDate})</span>
+                <Scale className="w-3.5 h-3.5 hidden sm:inline shrink-0" />
+                <span className="truncate">
+                  <span className="sm:hidden">Đã cân ({weighedCountOnDate})</span>
+                  <span className="hidden sm:inline">
+                    Có cân chỉ số ngày {formatShortDate(selectedDate)} ({weighedCountOnDate})
+                  </span>
+                </span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setStudentFilter('UNMARKED_ON_DATE')}
-                className={`px-3 py-1.5 rounded-xl font-bold border transition-colors cursor-pointer ${
+                className={`px-2 sm:px-3 py-1.5 rounded-xl font-bold border transition-colors cursor-pointer text-center truncate ${
                   studentFilter === 'UNMARKED_ON_DATE'
                     ? 'bg-amber-600 text-white border-amber-600'
                     : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                 }`}
               >
-                Chưa chấm phiếu ngày này
+                <span className="sm:hidden">Chưa chấm</span>
+                <span className="hidden sm:inline">Chưa chấm phiếu ngày này</span>
               </button>
             </div>
 
@@ -717,21 +738,33 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
           {/* ================================================================= */}
           {/* THANH CÔNG CỤ ĐÁNH PHIẾU HÀNG LOẠT CHO NHIỀU HỌC VIÊN CÙNG LÚC */}
           {/* ================================================================= */}
-          <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-50/90 via-teal-50/80 to-slate-50 border border-emerald-200/90 space-y-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex flex-wrap items-center gap-2 text-xs">
+          <div className="p-3 sm:p-3.5 rounded-2xl bg-gradient-to-r from-emerald-50/90 via-teal-50/80 to-slate-50 border border-emerald-200/90 space-y-2.5">
+            {/* Row 1: Selection Header & Quick Select Controls */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center justify-between sm:justify-start gap-2 text-xs">
+                <span className="text-[11px] sm:text-xs font-extrabold text-emerald-950">
+                  Đánh phiếu hàng loạt
+                </span>
+                <span className="px-2.5 py-0.5 rounded-full bg-emerald-600 text-white font-extrabold text-[11px] whitespace-nowrap">
+                  Đang chọn: {selectedStudentIds.length} HV
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-1.5 text-[11px] sm:text-xs">
                 <button
                   type="button"
                   onClick={handleToggleSelectAllVisible}
-                  className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 font-bold flex items-center space-x-1.5 cursor-pointer shadow-2xs"
+                  className={`px-2.5 py-1.5 rounded-xl bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 font-bold flex items-center justify-center space-x-1.5 cursor-pointer shadow-2xs ${
+                    weighedCountOnDate === 0 ? 'col-span-2' : ''
+                  }`}
                 >
                   {allVisibleSelected ? (
-                    <CheckSquare className="w-4 h-4 text-emerald-600" />
+                    <CheckSquare className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                   ) : (
-                    <Square className="w-4 h-4 text-slate-400" />
+                    <Square className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                   )}
-                  <span>
-                    {allVisibleSelected ? 'Bỏ chọn tất cả' : 'Chọn tất cả danh sách'}
+                  <span className="truncate">
+                    {allVisibleSelected ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
                   </span>
                 </button>
 
@@ -739,38 +772,30 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
                   <button
                     type="button"
                     onClick={handleSelectWeighedToday}
-                    className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 font-bold flex items-center space-x-1 cursor-pointer shadow-2xs"
+                    className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 font-bold flex items-center justify-center space-x-1 cursor-pointer shadow-2xs"
                   >
-                    <Scale className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Chọn nhanh {weighedCountOnDate} HV đã cân hôm nay</span>
+                    <Scale className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span className="truncate">Chọn {weighedCountOnDate} HV đã cân</span>
                   </button>
                 )}
-
-                <span className="px-2.5 py-1 rounded-full bg-emerald-600 text-white font-extrabold text-[11px]">
-                  Đang chọn: {selectedStudentIds.length} học viên
-                </span>
               </div>
-
-              {batchFeedback && (
-                <span className="text-xs font-extrabold text-emerald-800 bg-emerald-100 px-3 py-1 rounded-xl border border-emerald-300">
-                  ✓ {batchFeedback}
-                </span>
-              )}
             </div>
 
-            {/* Batch Action Buttons */}
-            <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-emerald-200/60 text-xs">
-              <span className="text-[11px] font-extrabold text-emerald-950 mr-1">
-                Đánh phiếu đồng loạt ({selectedStudentIds.length} HV):
-              </span>
+            {batchFeedback && (
+              <div className="text-[11px] sm:text-xs font-extrabold text-emerald-800 bg-emerald-100 px-3 py-1.5 rounded-xl border border-emerald-300">
+                ✓ {batchFeedback}
+              </div>
+            )}
 
+            {/* Row 2: Clean Grid of Batch Action Buttons */}
+            <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-1.5 pt-2 border-t border-emerald-200/70 text-[11px] sm:text-xs">
               <button
                 type="button"
                 disabled={selectedStudentIds.length === 0 || isBatchProcessing}
                 onClick={() => handleBatchMarkSelected('BOTH_USED')}
-                className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-bold transition-colors cursor-pointer shadow-2xs flex items-center space-x-1"
+                className="col-span-2 sm:col-span-1 px-3 py-2 sm:py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-bold transition-colors cursor-pointer shadow-2xs flex items-center justify-center space-x-1.5"
               >
-                <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                <Check className="w-3.5 h-3.5 stroke-[2.5] shrink-0" />
                 <span>Đủ Sáng + Chiều (Tại chỗ)</span>
               </button>
 
@@ -778,46 +803,46 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
                 type="button"
                 disabled={selectedStudentIds.length === 0 || isBatchProcessing}
                 onClick={() => handleBatchMarkSelected('MORNING_USED')}
-                className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-emerald-50 disabled:opacity-40 text-emerald-800 border border-emerald-300 font-bold transition-colors cursor-pointer flex items-center space-x-1"
+                className="px-2.5 py-2 sm:py-1.5 rounded-xl bg-white hover:bg-emerald-50 disabled:opacity-40 text-emerald-800 border border-emerald-300 font-bold transition-colors cursor-pointer flex items-center justify-center space-x-1"
               >
-                <Sun className="w-3.5 h-3.5 text-amber-500" />
-                <span>+ Sáng (Tại chỗ)</span>
+                <Sun className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                <span className="truncate">+ Sáng (Tại chỗ)</span>
               </button>
 
               <button
                 type="button"
                 disabled={selectedStudentIds.length === 0 || isBatchProcessing}
                 onClick={() => handleBatchMarkSelected('AFTERNOON_USED')}
-                className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-indigo-50 disabled:opacity-40 text-indigo-800 border border-indigo-300 font-bold transition-colors cursor-pointer flex items-center space-x-1"
+                className="px-2.5 py-2 sm:py-1.5 rounded-xl bg-white hover:bg-indigo-50 disabled:opacity-40 text-indigo-800 border border-indigo-300 font-bold transition-colors cursor-pointer flex items-center justify-center space-x-1"
               >
-                <Sunset className="w-3.5 h-3.5 text-indigo-500" />
-                <span>+ Chiều (Tại chỗ)</span>
+                <Sunset className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                <span className="truncate">+ Chiều (Tại chỗ)</span>
               </button>
 
               <button
                 type="button"
                 disabled={selectedStudentIds.length === 0 || isBatchProcessing}
                 onClick={() => handleBatchMarkSelected('MORNING_USED_AFTERNOON_TAKEAWAY')}
-                className="px-2.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 disabled:opacity-40 text-white font-bold transition-colors cursor-pointer flex items-center space-x-1"
+                className="px-2.5 py-2 sm:py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 disabled:opacity-40 text-white font-bold transition-colors cursor-pointer flex items-center justify-center space-x-1"
               >
-                <Package className="w-3.5 h-3.5" />
-                <span>Ăn Sáng + Mang về Chiều</span>
+                <Package className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Sáng + Mang về</span>
               </button>
 
               <button
                 type="button"
                 disabled={selectedStudentIds.length === 0 || isBatchProcessing}
                 onClick={() => handleBatchMarkSelected('WEIGHED_NO_MEAL')}
-                className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-900 disabled:opacity-40 text-white font-bold transition-colors cursor-pointer"
+                className="px-2.5 py-2 sm:py-1.5 rounded-xl bg-slate-800 hover:bg-slate-900 disabled:opacity-40 text-white font-bold transition-colors cursor-pointer flex items-center justify-center truncate"
               >
-                ⚖️ Cân nhưng không ăn
+                ⚖️ Cân - Không ăn
               </button>
 
               <button
                 type="button"
                 disabled={selectedStudentIds.length === 0 || isBatchProcessing}
                 onClick={() => handleBatchMarkSelected('CLEAR_DAY')}
-                className="px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 disabled:opacity-40 text-rose-700 border border-rose-200 font-bold transition-colors cursor-pointer"
+                className="col-span-2 sm:col-span-1 px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 disabled:opacity-40 text-rose-700 border border-rose-200 font-bold transition-colors cursor-pointer flex items-center justify-center"
               >
                 Xóa chấm ngày này
               </button>
@@ -825,7 +850,7 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
           </div>
 
           {/* ================================================================= */}
-          {/* DANH SÁCH HỌC VIÊN ĐỂ CHẤM PHIẾU TRỰC TIẾP TRÊN 1 BẢNG */}
+          {/* DANH SÁCH HỌC VIÊN ĐỂ CHẤM PHIẾU (MOBILE TỐI GIẢN + DESKTOP BẢNG) */}
           {/* ================================================================= */}
           {enrichedStudentRows.length === 0 ? (
             <div className="p-8 rounded-2xl bg-slate-50 border border-dashed border-slate-200 text-center space-y-2">
@@ -846,7 +871,191 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
               )}
             </div>
           ) : (
-            <div className="overflow-x-auto border border-slate-200 rounded-2xl">
+            <>
+              {/* MOBILE MINIMALIST LIST (< md) */}
+              <div className="md:hidden space-y-2">
+                <div className="flex items-center justify-between px-1 text-[10.5px] text-slate-500">
+                  <span>Chạm <strong>Sáng / Chiều</strong> để đổi: Tại chỗ ✓ → Mang về 🥡 → Trống</span>
+                </div>
+
+                {enrichedStudentRows.map(
+                  ({
+                    student: s,
+                    stats: sStats,
+                    dateSlot,
+                    metricOnDate,
+                    morningStatus,
+                    afternoonStatus,
+                    isWeighedNoMeal,
+                  }) => {
+                    const isChecked = selectedStudentIds.includes(s.id);
+                    const isBothUsed = morningStatus === 'used' && afternoonStatus === 'used';
+                    const currentNote =
+                      noteDrafts[`${s.id}-${selectedDate}`] !== undefined
+                        ? noteDrafts[`${s.id}-${selectedDate}`]
+                        : dateSlot?.note || '';
+
+                    return (
+                      <div
+                        key={s.id}
+                        className={`p-2.5 rounded-xl border transition-colors space-y-2 ${
+                          isChecked
+                            ? 'bg-emerald-50/70 border-emerald-300'
+                            : 'bg-white border-slate-200/90'
+                        }`}
+                      >
+                        {/* Top row: Checkbox + Name + Weigh badge + Remaining + View Card */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <button
+                              type="button"
+                              onClick={() => toggleSelectStudentId(s.id)}
+                              className="p-0.5 shrink-0 cursor-pointer"
+                              aria-label={`Chọn ${s.fullName}`}
+                            >
+                              {isChecked ? (
+                                <CheckSquare className="w-4 h-4 text-emerald-600" />
+                              ) : (
+                                <Square className="w-4 h-4 text-slate-300" />
+                              )}
+                            </button>
+
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-extrabold text-slate-900 text-xs truncate">
+                                  {s.fullName}
+                                </span>
+                                {metricOnDate && (
+                                  <span className="px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-bold shrink-0">
+                                    {metricOnDate.weight}kg
+                                  </span>
+                                )}
+                                {isWeighedNoMeal && (
+                                  <span className="px-1.5 py-0.5 rounded-md bg-slate-800 text-white text-[10px] font-bold shrink-0">
+                                    Không ăn
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="px-2 py-0.5 rounded-lg bg-slate-100 text-[10.5px] font-extrabold text-slate-700 tabular-nums">
+                              {sStats.usedPortions}/{sStats.totalPortions}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setInspectCardStudent(s);
+                                setSelectedStudent(s);
+                                setTimeout(() => {
+                                  cardSectionRef.current?.scrollIntoView({
+                                    behavior: 'smooth',
+                                    block: 'start',
+                                  });
+                                }, 50);
+                              }}
+                              className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
+                                activeCardStudent?.id === s.id
+                                  ? 'bg-emerald-600 text-white border-emerald-600'
+                                  : 'bg-slate-50 text-slate-600 border-slate-200'
+                              }`}
+                              title="Xem thẻ 30 ngày"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Bottom row: Minimalist 1-tap Sáng / Chiều / Đủ 2 */}
+                        <div className="grid grid-cols-[1fr_1fr_auto] gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const nextStatus = cyclePortionStatus(morningStatus);
+                              handleQuickMarkOnDate(s.id, selectedDate, {
+                                morningStatus: nextStatus,
+                                note:
+                                  nextStatus === 'takeaway'
+                                    ? currentNote || 'Mang khẩu phần Sáng về'
+                                    : currentNote,
+                              });
+                            }}
+                            className={`h-8 px-2 rounded-lg border text-[11px] font-bold flex items-center justify-center gap-1 transition-colors cursor-pointer ${
+                              morningStatus === 'used'
+                                ? 'bg-emerald-600 text-white border-emerald-600'
+                                : morningStatus === 'takeaway'
+                                ? 'bg-amber-500 text-white border-amber-500'
+                                : 'bg-slate-50 text-slate-600 border-slate-200'
+                            }`}
+                          >
+                            <Sun className="w-3 h-3 shrink-0" />
+                            <span>
+                              {morningStatus === 'used'
+                                ? 'Sáng ✓'
+                                : morningStatus === 'takeaway'
+                                ? 'Sáng 🥡'
+                                : 'Sáng'}
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const nextStatus = cyclePortionStatus(afternoonStatus);
+                              handleQuickMarkOnDate(s.id, selectedDate, {
+                                afternoonStatus: nextStatus,
+                                note:
+                                  nextStatus === 'takeaway'
+                                    ? currentNote || 'Mang khẩu phần Chiều về hôm sau'
+                                    : currentNote,
+                              });
+                            }}
+                            className={`h-8 px-2 rounded-lg border text-[11px] font-bold flex items-center justify-center gap-1 transition-colors cursor-pointer ${
+                              afternoonStatus === 'used'
+                                ? 'bg-emerald-600 text-white border-emerald-600'
+                                : afternoonStatus === 'takeaway'
+                                ? 'bg-amber-500 text-white border-amber-500'
+                                : 'bg-slate-50 text-slate-600 border-slate-200'
+                            }`}
+                          >
+                            <Sunset className="w-3 h-3 shrink-0" />
+                            <span>
+                              {afternoonStatus === 'used'
+                                ? 'Chiều ✓'
+                                : afternoonStatus === 'takeaway'
+                                ? 'Chiều 🥡'
+                                : 'Chiều'}
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleQuickMarkOnDate(s.id, selectedDate, {
+                                morningStatus: isBothUsed ? 'none' : 'used',
+                                afternoonStatus: isBothUsed ? 'none' : 'used',
+                                attendanceStatus: isBothUsed ? undefined : 'ate',
+                                note: isBothUsed ? '' : 'Dùng đủ 2 bữa Sáng + Chiều',
+                              })
+                            }
+                            className={`h-8 px-2.5 rounded-lg border text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                              isBothUsed
+                                ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            }`}
+                          >
+                            Đủ 2
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  }
+                )}
+              </div>
+
+              {/* DESKTOP FULL TABLE (>= md) */}
+              <div className="hidden md:block overflow-x-auto border border-slate-200 rounded-2xl">
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="bg-slate-100/90 text-slate-700 border-b border-slate-200">
@@ -1127,7 +1336,8 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
                   )}
                 </tbody>
               </table>
-            </div>
+              </div>
+            </>
           )}
         </div>
       )}
@@ -1136,7 +1346,10 @@ export const NutritionTicketManager: React.FC<NutritionTicketManagerProps> = ({
       {/* PHẦN 2: CHI TIẾT THẺ PHIẾU ĂN 30 NGÀY CỦA HỌC VIÊN ĐANG CHỌN */}
       {/* ===================================================================== */}
       {activeCardStudent ? (
-        <div className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-6 border border-slate-200/90 shadow-xs space-y-5">
+        <div
+          ref={cardSectionRef}
+          className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-6 border border-slate-200/90 shadow-xs space-y-5"
+        >
           {/* Card Header & Student Selector */}
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-4 border-b border-slate-100">
             <div>

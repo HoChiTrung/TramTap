@@ -18,7 +18,7 @@ import {
   Check,
   X,
   UserCheck,
-  Database,
+  Search,
 } from 'lucide-react';
 
 export const TrainerManagementView: React.FC = () => {
@@ -52,21 +52,31 @@ export const TrainerManagementView: React.FC = () => {
   const [editDiscountTier, setEditDiscountTier] = useState<number>(50);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [selectedTrainerFilter, setSelectedTrainerFilter] = useState<string>('ALL');
+  const [studentSearch, setStudentSearch] = useState('');
 
   const trainerAccounts = users.filter((u) => u.role === 'trainer' || u.role === 'admin');
   const studentAccounts = users.filter((u) => u.role === 'student');
   const unassignedStudentsCount = allStudents.filter(
     (s) => !s.trainerId || !trainerAccounts.some((tr) => tr.id === s.trainerId)
   ).length;
-  const filteredAssignmentStudents =
+  const filteredAssignmentStudents = (
     selectedTrainerFilter === 'ALL'
       ? allStudents
       : selectedTrainerFilter === 'UNASSIGNED'
       ? allStudents.filter(
           (s) => !s.trainerId || !trainerAccounts.some((tr) => tr.id === s.trainerId)
         )
-      : allStudents.filter((s) => s.trainerId === selectedTrainerFilter);
-  const inspectedTrainer = trainerAccounts.find((t) => t.id === selectedTrainerFilter) || null;
+      : allStudents.filter((s) => s.trainerId === selectedTrainerFilter)
+  ).filter((st) => {
+    const q = studentSearch.trim().toLowerCase();
+    if (!q) return true;
+    const stUser = studentAccounts.find((u) => u.studentId === st.id);
+    return (
+      st.fullName.toLowerCase().includes(q) ||
+      (st.phone || '').includes(q) ||
+      (stUser?.username || '').toLowerCase().includes(q)
+    );
+  });
 
   const handleCreateTrainer = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -144,41 +154,32 @@ export const TrainerManagementView: React.FC = () => {
 
   return (
     <div className="space-y-5">
-      {/* Top Banner */}
-      <div className="bg-gradient-to-r from-slate-900 via-emerald-950 to-slate-900 rounded-2xl sm:rounded-3xl p-4 sm:p-6 text-white shadow-md">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      {/* Top Banner (Compact) */}
+      <div className="bg-gradient-to-r from-slate-900 via-emerald-950 to-slate-900 rounded-2xl p-4 sm:p-5 text-white shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
-                <Database className="w-3 h-3" />
-                Database Account Center
-              </span>
-              <span className="text-xs text-slate-300">
-                Đang đăng nhập quyền: <strong className="text-white">{currentUser?.fullName} (@{currentUser?.username})</strong>
-              </span>
+            <div className="text-[11px] text-emerald-300 font-bold">
+              Quản Trị Hệ Thống · @{currentUser?.username}
             </div>
-            <h2 className="text-lg sm:text-xl font-black tracking-tight mt-1">
-              Quản Lý Tài Khoản HLV, Phân Công Học Viên &amp; Database Auth
+            <h2 className="text-base sm:text-lg font-black tracking-tight mt-0.5">
+              Quản Lý HLV &amp; Học Viên
             </h2>
-            <p className="text-xs text-slate-300 mt-1">
-              Toàn bộ tài khoản đăng nhập (Admin, nhiều Huấn Luyện Viên và Học Viên) được lưu trữ trực tiếp trong bảng <code className="text-emerald-300 font-mono">users</code> trên Database.
-            </p>
           </div>
 
           <div className="grid grid-cols-3 gap-2 text-center text-xs shrink-0">
-            <div className="px-3 py-2 rounded-xl bg-white/10 border border-white/10">
-              <div className="text-[10px] text-slate-300">Tài khoản HLV</div>
-              <div className="text-base font-black text-emerald-400">
+            <div className="px-3 py-1.5 rounded-xl bg-white/10 border border-white/10">
+              <div className="text-[10px] text-slate-300">HLV</div>
+              <div className="text-sm sm:text-base font-black text-emerald-400">
                 {users.filter((u) => u.role === 'trainer').length}
               </div>
             </div>
-            <div className="px-3 py-2 rounded-xl bg-white/10 border border-white/10">
+            <div className="px-3 py-1.5 rounded-xl bg-white/10 border border-white/10">
               <div className="text-[10px] text-slate-300">Học viên</div>
-              <div className="text-base font-black text-cyan-400">{allStudents.length}</div>
+              <div className="text-sm sm:text-base font-black text-cyan-400">{allStudents.length}</div>
             </div>
-            <div className="px-3 py-2 rounded-xl bg-white/10 border border-white/10">
-              <div className="text-[10px] text-slate-300">Tổng User DB</div>
-              <div className="text-base font-black text-white">{users.length}</div>
+            <div className="px-3 py-1.5 rounded-xl bg-white/10 border border-white/10">
+              <div className="text-[10px] text-slate-300">Tài khoản</div>
+              <div className="text-sm sm:text-base font-black text-white">{users.length}</div>
             </div>
           </div>
         </div>
@@ -437,12 +438,10 @@ export const TrainerManagementView: React.FC = () => {
                           )}
                         </div>
                         <div className="text-[11px] text-slate-500 mt-1">
-                          Đang phụ trách:{' '}
+                          Phụ trách:{' '}
                           <strong className="text-emerald-700">
                             {managedStudents.length} học viên
                           </strong>
-                          {managedStudents.length > 0 &&
-                            ` (${managedStudents.map((s) => s.fullName).join(', ')})`}
                         </div>
                       </div>
 
@@ -518,168 +517,272 @@ export const TrainerManagementView: React.FC = () => {
         </div>
       </div>
 
-      {/* Section 2: Student-to-Trainer Assignment & Student Login Accounts */}
-      <div className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-slate-200/90 shadow-xs space-y-4">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+      {/* Section 2: Compact Student List & Trainer Assignment */}
+      <div className="bg-white rounded-2xl sm:rounded-3xl p-3.5 sm:p-5 border border-slate-200/90 shadow-xs space-y-3">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5 pb-3 border-b border-slate-100">
           <div className="flex items-center space-x-2">
-            <UserCheck className="w-5 h-5 text-indigo-600 shrink-0" />
-            <div>
-              <h3 className="font-extrabold text-slate-900 text-sm">
-                Phân Công Học Viên Theo HLV ({filteredAssignmentStudents.length}/{allStudents.length})
-              </h3>
-              <p className="text-[11px] text-slate-500">
-                {inspectedTrainer
-                  ? `Đang lọc theo HLV ${inspectedTrainer.fullName} (@${inspectedTrainer.username}) — Tổng cộng ${filteredAssignmentStudents.length} học viên`
-                  : selectedTrainerFilter === 'UNASSIGNED'
-                  ? `Đang lọc các học viên chưa gán HLV — Tổng cộng ${filteredAssignmentStudents.length} học viên`
-                  : 'Chọn một HLV bất kỳ để xem số lượng & danh sách học viên thuộc phụ trách của HLV đó'}
-              </p>
-            </div>
+            <UserCheck className="w-4 h-4 sm:w-5 sm:h-5 text-indigo-600 shrink-0" />
+            <h3 className="font-extrabold text-slate-900 text-sm">
+              Học Viên ({filteredAssignmentStudents.length}/{allStudents.length})
+            </h3>
           </div>
 
-          <div className="flex items-center gap-2 text-xs">
-            <select
-              value={selectedTrainerFilter}
-              onChange={(e) => setSelectedTrainerFilter(e.target.value)}
-              className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 outline-hidden focus:ring-2 focus:ring-emerald-500"
-            >
-              <option value="ALL">Tất cả HLV ({allStudents.length} học viên)</option>
-              {trainerAccounts.map((tr) => {
-                const count = allStudents.filter((s) => s.trainerId === tr.id).length;
-                return (
-                  <option key={tr.id} value={tr.id}>
-                    {tr.fullName} (@{tr.username}) — {count} học viên
-                  </option>
-                );
-              })}
-              {unassignedStudentsCount > 0 && (
-                <option value="UNASSIGNED">
-                  Chưa gán HLV — {unassignedStudentsCount} học viên
-                </option>
-              )}
-            </select>
-            {selectedTrainerFilter !== 'ALL' && (
-              <button
-                type="button"
-                onClick={() => setSelectedTrainerFilter('ALL')}
-                className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold cursor-pointer whitespace-nowrap"
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 text-xs">
+            <div className="relative flex-1 sm:w-48">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
+              <input
+                type="text"
+                placeholder="Tìm tên, SĐT, TK..."
+                value={studentSearch}
+                onChange={(e) => setStudentSearch(e.target.value)}
+                className="w-full pl-8 pr-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500 outline-hidden"
+              />
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <select
+                value={selectedTrainerFilter}
+                onChange={(e) => setSelectedTrainerFilter(e.target.value)}
+                className="flex-1 sm:flex-initial px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 outline-hidden focus:ring-2 focus:ring-emerald-500"
               >
-                Hiện tất cả
-              </button>
-            )}
+                <option value="ALL">Tất cả HLV ({allStudents.length})</option>
+                {trainerAccounts.map((tr) => {
+                  const count = allStudents.filter((s) => s.trainerId === tr.id).length;
+                  return (
+                    <option key={tr.id} value={tr.id}>
+                      {tr.fullName} ({count})
+                    </option>
+                  );
+                })}
+                {unassignedStudentsCount > 0 && (
+                  <option value="UNASSIGNED">Chưa gán ({unassignedStudentsCount})</option>
+                )}
+              </select>
+              {selectedTrainerFilter !== 'ALL' && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedTrainerFilter('ALL')}
+                  className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold cursor-pointer whitespace-nowrap"
+                >
+                  Tất cả
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
         {filteredAssignmentStudents.length === 0 ? (
-          <div className="py-10 text-center text-xs text-slate-400">
-            <Users className="w-8 h-8 text-slate-300 mx-auto mb-1.5" />
-            {selectedTrainerFilter === 'ALL'
-              ? 'Chưa có hồ sơ học viên nào trong Database.'
-              : 'HLV này hiện chưa phụ trách học viên nào.'}
+          <div className="py-8 text-center text-xs text-slate-400">
+            <Users className="w-7 h-7 text-slate-300 mx-auto mb-1" />
+            Không tìm thấy học viên nào.
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr className="bg-slate-50 text-slate-600 border-b border-slate-200">
-                  <th className="py-2.5 px-3 font-bold">Học Viên</th>
-                  <th className="py-2.5 px-3 font-bold">Số Điện Thoại</th>
-                  <th className="py-2.5 px-3 font-bold">Tài Khoản Đăng Nhập (DB)</th>
-                  <th className="py-2.5 px-3 font-bold">Huấn Luyện Viên Phụ Trách</th>
-                  <th className="py-2.5 px-3 font-bold text-right">Đổi Mật Khẩu Học Viên</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredAssignmentStudents.map((st) => {
-                  const stUser = studentAccounts.find((u) => u.studentId === st.id);
-                  const isEditingStUser = stUser && editingUser?.id === stUser.id;
+          <>
+            {/* Mobile Minimalist Student Cards (< md) */}
+            <div className="md:hidden space-y-2">
+              {filteredAssignmentStudents.map((st) => {
+                const stUser = studentAccounts.find((u) => u.studentId === st.id);
+                const isEditingStUser = stUser && editingUser?.id === stUser.id;
 
-                  return (
-                    <tr key={st.id} className="hover:bg-slate-50/80">
-                      <td className="py-3 px-3 font-extrabold text-slate-900">
-                        {st.fullName}
-                        <span className="ml-1.5 text-[10px] font-semibold text-slate-400">
-                          ({st.gender}, {st.age}t)
-                        </span>
-                      </td>
-                      <td className="py-3 px-3 font-mono text-slate-600">{st.phone}</td>
-                      <td className="py-3 px-3">
-                        {stUser ? (
-                          <span className="px-2 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-900 font-mono font-bold">
-                            @{stUser.username}
+                return (
+                  <div
+                    key={st.id}
+                    className="p-2.5 rounded-xl border border-slate-200/90 bg-slate-50/50 space-y-2 text-xs"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-extrabold text-slate-900 truncate">
+                          {st.fullName}
+                          <span className="ml-1 text-[10px] font-medium text-slate-400">
+                            {st.gender}, {st.age}t
                           </span>
-                        ) : (
-                          <span className="text-slate-400 italic">Chưa liên kết</span>
-                        )}
-                      </td>
-                      <td className="py-3 px-3">
+                        </div>
+                        <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-slate-500">
+                          {st.phone && <span className="font-mono">{st.phone}</span>}
+                          {stUser ? (
+                            <span className="px-1.5 py-0.2 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 font-mono text-[10px] font-bold">
+                              @{stUser.username}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-slate-400 italic">Chưa có TK</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {stUser && !isEditingStUser && (
+                        <button
+                          type="button"
+                          onClick={() => startEditUser(stUser)}
+                          className="p-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 shrink-0 cursor-pointer"
+                          title="Đổi tài khoản / mật khẩu"
+                        >
+                          <KeyRound className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+
+                    {isEditingStUser ? (
+                      <form onSubmit={handleSaveEditUser} className="grid grid-cols-2 gap-1.5">
+                        <input
+                          type="text"
+                          placeholder="Username"
+                          value={editUsername}
+                          onChange={(e) => setEditUsername(e.target.value)}
+                          className="px-2 py-1.5 bg-white border border-slate-300 rounded-lg font-mono text-[11px]"
+                          required
+                        />
+                        <input
+                          type="text"
+                          placeholder="MK mới"
+                          value={editPassword}
+                          onChange={(e) => setEditPassword(e.target.value)}
+                          className="px-2 py-1.5 bg-white border border-slate-300 rounded-lg font-mono text-[11px]"
+                        />
+                        <button
+                          type="submit"
+                          className="py-1.5 bg-emerald-600 text-white rounded-lg font-bold text-[11px] cursor-pointer"
+                        >
+                          Lưu
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingUser(null)}
+                          className="py-1.5 bg-slate-200 text-slate-700 rounded-lg font-bold text-[11px] cursor-pointer"
+                        >
+                          Hủy
+                        </button>
+                      </form>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] font-semibold text-slate-500 shrink-0">
+                          HLV:
+                        </span>
                         <select
                           value={st.trainerId || ''}
                           onChange={(e) => assignStudentToTrainer(st.id, e.target.value)}
-                          className="px-2.5 py-1.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500 outline-hidden"
+                          className="flex-1 min-w-0 px-2 py-1 bg-white border border-slate-200 rounded-lg font-bold text-slate-800 text-[11px] outline-hidden"
                         >
-                          <option value="">-- Chưa gán HLV --</option>
+                          <option value="">-- Chưa gán --</option>
                           {trainerAccounts.map((tr) => (
                             <option key={tr.id} value={tr.id}>
-                              {tr.fullName} (@{tr.username})
+                              {tr.fullName}
                             </option>
                           ))}
                         </select>
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        {stUser ? (
-                          isEditingStUser ? (
-                            <form
-                              onSubmit={handleSaveEditUser}
-                              className="inline-flex items-center space-x-1.5"
-                            >
-                              <input
-                                type="text"
-                                placeholder="Username"
-                                value={editUsername}
-                                onChange={(e) => setEditUsername(e.target.value)}
-                                className="w-24 px-2 py-1 border border-slate-300 rounded-lg font-mono text-xs"
-                                required
-                              />
-                              <input
-                                type="text"
-                                placeholder="Mật khẩu mới"
-                                value={editPassword}
-                                onChange={(e) => setEditPassword(e.target.value)}
-                                className="w-24 px-2 py-1 border border-slate-300 rounded-lg font-mono text-xs"
-                              />
-                              <button
-                                type="submit"
-                                className="px-2.5 py-1 bg-emerald-600 text-white rounded-lg font-bold cursor-pointer"
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Desktop Compact Table (>= md) */}
+            <div className="hidden md:block overflow-x-auto border border-slate-200/80 rounded-2xl">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-600 border-b border-slate-200">
+                    <th className="py-2 px-3 font-bold">Học Viên</th>
+                    <th className="py-2 px-3 font-bold">Tài Khoản</th>
+                    <th className="py-2 px-3 font-bold">HLV Phụ Trách</th>
+                    <th className="py-2 px-3 font-bold text-right">Thao Tác</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredAssignmentStudents.map((st) => {
+                    const stUser = studentAccounts.find((u) => u.studentId === st.id);
+                    const isEditingStUser = stUser && editingUser?.id === stUser.id;
+
+                    return (
+                      <tr key={st.id} className="hover:bg-slate-50/80">
+                        <td className="py-2 px-3">
+                          <div className="font-extrabold text-slate-900">
+                            {st.fullName}
+                            <span className="ml-1.5 text-[10px] font-medium text-slate-400">
+                              {st.gender}, {st.age}t
+                            </span>
+                          </div>
+                          {st.phone && (
+                            <div className="font-mono text-[11px] text-slate-500">{st.phone}</div>
+                          )}
+                        </td>
+                        <td className="py-2 px-3">
+                          {stUser ? (
+                            <span className="px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-900 font-mono text-[11px] font-bold">
+                              @{stUser.username}
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-slate-400 italic">Chưa có TK</span>
+                          )}
+                        </td>
+                        <td className="py-2 px-3">
+                          <select
+                            value={st.trainerId || ''}
+                            onChange={(e) => assignStudentToTrainer(st.id, e.target.value)}
+                            className="px-2.5 py-1 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500 outline-hidden"
+                          >
+                            <option value="">-- Chưa gán --</option>
+                            {trainerAccounts.map((tr) => (
+                              <option key={tr.id} value={tr.id}>
+                                {tr.fullName}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          {stUser ? (
+                            isEditingStUser ? (
+                              <form
+                                onSubmit={handleSaveEditUser}
+                                className="inline-flex items-center space-x-1.5"
                               >
-                                Lưu
-                              </button>
+                                <input
+                                  type="text"
+                                  placeholder="Username"
+                                  value={editUsername}
+                                  onChange={(e) => setEditUsername(e.target.value)}
+                                  className="w-24 px-2 py-1 border border-slate-300 rounded-lg font-mono text-xs"
+                                  required
+                                />
+                                <input
+                                  type="text"
+                                  placeholder="MK mới"
+                                  value={editPassword}
+                                  onChange={(e) => setEditPassword(e.target.value)}
+                                  className="w-24 px-2 py-1 border border-slate-300 rounded-lg font-mono text-xs"
+                                />
+                                <button
+                                  type="submit"
+                                  className="px-2.5 py-1 bg-emerald-600 text-white rounded-lg font-bold cursor-pointer"
+                                >
+                                  Lưu
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingUser(null)}
+                                  className="px-2 py-1 bg-slate-200 text-slate-700 rounded-lg font-bold cursor-pointer"
+                                >
+                                  Hủy
+                                </button>
+                              </form>
+                            ) : (
                               <button
                                 type="button"
-                                onClick={() => setEditingUser(null)}
-                                className="px-2 py-1 bg-slate-200 text-slate-700 rounded-lg font-bold cursor-pointer"
+                                onClick={() => startEditUser(stUser)}
+                                className="inline-flex items-center space-x-1 px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-bold cursor-pointer"
                               >
-                                Hủy
+                                <KeyRound className="w-3.5 h-3.5 text-slate-500" />
+                                <span>Đổi MK</span>
                               </button>
-                            </form>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => startEditUser(stUser)}
-                              className="inline-flex items-center space-x-1 px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-bold cursor-pointer"
-                            >
-                              <KeyRound className="w-3.5 h-3.5 text-slate-500" />
-                              <span>Đổi TK / MK</span>
-                            </button>
-                          )
-                        ) : null}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                            )
+                          ) : null}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
     </div>
